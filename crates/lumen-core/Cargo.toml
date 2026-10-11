@@ -1,0 +1,19 @@
+[package]
+name = "lumen-core"
+description = "Lumen engine: canvas layout, effect layers, renderer and OpenRGB streaming"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+openrgb-sdk = { path = "../openrgb-sdk" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
