@@ -221,10 +221,27 @@ function drawGlowGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb) {
     [1.45, 0.17],
   ] as const) {
     if (g.type === "strip") {
-      glyphPath(ctx, led);
+      // Butt caps so neighbouring segments don't double up into bright beads;
+      // extend the path a little into the gap between segments so it stays seamless.
+      const pts = g.points;
+      if (pts.length >= 2) {
+        const ext = 2.5;
+        const [ax, ay] = pts[0];
+        const [bx, by] = pts[1];
+        const [yx, yy] = pts[pts.length - 2];
+        const [zx, zy] = pts[pts.length - 1];
+        const d0 = Math.hypot(ax - bx, ay - by) || 1;
+        const d1 = Math.hypot(zx - yx, zy - yy) || 1;
+        ctx.beginPath();
+        ctx.moveTo(ax + ((ax - bx) / d0) * ext, ay + ((ay - by) / d0) * ext);
+        for (let i = 1; i < pts.length - 1; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.lineTo(zx + ((zx - yx) / d1) * ext, zy + ((zy - yy) / d1) * ext);
+      } else {
+        glyphPath(ctx, led);
+      }
       ctx.strokeStyle = rgba(alpha);
       ctx.lineWidth = g.width * inflate * 1.35;
-      ctx.lineCap = "round";
+      ctx.lineCap = "butt";
       ctx.lineJoin = "round";
       ctx.stroke();
     } else {
