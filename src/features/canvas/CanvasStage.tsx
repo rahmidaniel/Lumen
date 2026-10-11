@@ -195,21 +195,43 @@ function drawGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb | null, 
   ctx.fill();
 }
 
-/** Flat, slightly inflated glyph for the glow layer (blurred once per frame). */
+/**
+ * Cheap glow: translucent inflated copies of the glyph, composited additively.
+ * No blur filter — a full-canvas Gaussian every frame was the single most
+ * expensive thing the preview did.
+ */
 function drawGlowGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb) {
   const lit = Math.max(c[0], c[1], c[2]) / 255;
   if (lit < 0.08) return;
-  const css = `rgb(${c[0]} ${c[1]} ${c[2]} / ${(0.35 + 0.55 * lit).toFixed(2)})`;
-  glyphPath(ctx, led, 1.15);
-  if (led.glyph.type === "strip") {
-    ctx.strokeStyle = css;
-    ctx.lineWidth = led.glyph.width * 1.8;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.stroke();
-  } else {
-    ctx.fillStyle = css;
+  const rgba = (a: number) => `rgb(${c[0]} ${c[1]} ${c[2]} / ${(a * lit).toFixed(3)})`;
+  const g = led.glyph;
+  if (g.type === "dot") {
+    const r = g.r * 3.2;
+    const grad = ctx.createRadialGradient(led.x, led.y, g.r * 0.4, led.x, led.y, r);
+    grad.addColorStop(0, rgba(0.6));
+    grad.addColorStop(1, rgba(0));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(led.x, led.y, r, 0, Math.PI * 2);
     ctx.fill();
+    return;
+  }
+  for (const [inflate, alpha] of [
+    [2.1, 0.09],
+    [1.45, 0.17],
+  ] as const) {
+    if (g.type === "strip") {
+      glyphPath(ctx, led);
+      ctx.strokeStyle = rgba(alpha);
+      ctx.lineWidth = g.width * inflate * 1.35;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.stroke();
+    } else {
+      glyphPath(ctx, led, inflate);
+      ctx.fillStyle = rgba(alpha);
+      ctx.fill();
+    }
   }
 }
 
@@ -222,10 +244,6 @@ function enterDevice(ctx: CanvasRenderingContext2D, t: Transform, p: Placement) 
   ctx.rotate((p.rotation * Math.PI) / 180);
   ctx.translate(-p.width / 2, -p.height / 2);
 }
-
-// Offscreen layer for the glow: every lit glyph is drawn flat here and the
-// whole layer is blurred once while compositing — one blur instead of one per LED.
-let glowLayer: HTMLCanvasElement | null = null;
 
 interface SceneState {
   placements: Record<string, Placement>;
@@ -265,38 +283,18 @@ function drawScene(
     ctx.restore();
   }
 
-  // Pass 2: glow — flat glyphs on an offscreen layer, blurred once on composite.
-  const dpr = window.devicePixelRatio || 1;
-  const supportsFilter = "filter" in ctx;
-  if (supportsFilter) {
-    glowLayer ??= document.createElement("canvas");
-    const gw = Math.max(1, Math.floor(width * dpr));
-    const gh = Math.max(1, Math.floor(height * dpr));
-    if (glowLayer.width !== gw || glowLayer.height !== gh) {
-      glowLayer.width = gw;
-      glowLayer.height = gh;
+  // Pass 2: glow, additive.
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (const { p, g, rgb } of placed) {
+    enterDevice(ctx, t, p);
+    for (const led of g.leds) {
+      const c = colorOf(rgb, led);
+      if (c) drawGlowGlyph(ctx, led, c);
     }
-    const gctx = glowLayer.getContext("2d");
-    if (gctx) {
-      gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      gctx.clearRect(0, 0, width, height);
-      for (const { p, g, rgb } of placed) {
-        enterDevice(gctx, t, p);
-        for (const led of g.leds) {
-          const c = colorOf(rgb, led);
-          if (c) drawGlowGlyph(gctx, led, c);
-        }
-        gctx.restore();
-      }
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalCompositeOperation = "lighter";
-      ctx.filter = `blur(${Math.round(9 * dpr)}px)`;
-      ctx.drawImage(glowLayer, 0, 0);
-      ctx.restore();
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
+    ctx.restore();
   }
+  ctx.restore();
 
   // Pass 3: crisp glyphs and labels.
   const labels: { text: string; x: number; y: number; strong: boolean }[] = [];
@@ -369,24 +367,50 @@ export function CanvasStage() {
 
   useEffect(() => frames.subscribe(() => void (dirtyRef.current = true)), []);
 
+  // Presenting a large canvas is what costs CPU in the WebView, not our draw
+  // calls: cap the rate, and when the window is not focused drop to a few fps
+  // at reduced resolution.
+  const focusedRef = useRef(document.hasFocus());
+  useEffect(() => {
+    const onFocus = () => {
+      focusedRef.current = true;
+      dirtyRef.current = true;
+    };
+    const onBlur = () => {
+      focusedRef.current = false;
+      dirtyRef.current = true;
+    };
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     let raf = 0;
     let running = false;
+    let lastDraw = 0;
     const draw = () => {
       raf = requestAnimationFrame(draw);
       if (!dirtyRef.current) return;
+      const focused = focusedRef.current;
+      const now = performance.now();
+      if (now - lastDraw < (focused ? 40 : 125)) return; // 25 fps focused, 8 fps otherwise
+      lastDraw = now;
       dirtyRef.current = false;
-      const dpr = window.devicePixelRatio || 1;
-      const w = Math.floor(size.width * dpr);
-      const h = Math.floor(size.height * dpr);
+      const scale = (window.devicePixelRatio || 1) * (focused ? 1 : 0.6);
+      const w = Math.max(1, Math.floor(size.width * scale));
+      const h = Math.max(1, Math.floor(size.height * scale));
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
       }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
       drawScene(ctx, size.width, size.height, stateRef.current, viewRef.current ?? fitRef.current, frames.latest, hoverRef.current);
     };
     const start = () => {

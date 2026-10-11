@@ -59,6 +59,16 @@ OpenRGB is GPL-2.0-or-later and is bundled unmodified with its licence text —
 see `THIRD_PARTY_NOTICES.md`.
 
 Footprint: the window is disposable (closing it destroys the WebView while lighting
-continues from the tray), preview frames exist only while it is visible, static scenes
-render once, and the render rate is selectable (30/60 fps). "Start with Windows" launches
-hidden via `--hidden`.
+continues from the tray), preview frames exist only while it is visible and are capped at
+25 fps (8 fps at reduced resolution when the window is not focused), static scenes render
+once, and the render rate is selectable (30/60 fps). "Start with Windows" launches hidden
+via `--hidden`. Measured with `scripts/measure-footprint.ps1` on the release build while
+streaming a 60 fps effect to four devices (2026-10-11):
+
+| state | processes | CPU (one core) | working set | private |
+|---|---|---|---|---|
+| closed to tray (engine only) | 1 | ~2 % | 30 MB | 5 MB |
+| window open | 7 (Lumen + WebView2) | ~15 % | ~400 MB | ~210 MB |
+
+The open-window cost is Chromium presenting the live canvas (GPU process + browser), not
+the effect engine; it disappears entirely when the window is closed.

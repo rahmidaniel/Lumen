@@ -90,13 +90,16 @@ fn sidecar_devices(devices: &[DeviceInfo]) -> Vec<(u32, Target)> {
     devices.iter().filter_map(|d| target_for(&d.location).map(|t| (d.id, t))).collect()
 }
 
-/// Poll battery state for every Razer device OpenRGB knows about: on each
-/// device-list change and then every minute.
+/// Poll battery state for every sidecar device OpenRGB knows about: on each
+/// device-list change, then every minute — with a quick retry while a device
+/// has never answered (wireless gear dozes and misses the first probe).
 pub async fn run(engine: EngineHandle) {
     let mut snapshots = engine.watch_snapshot();
     let mut known: Vec<(u32, Target)> = Vec::new();
+    let mut answered: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut ticker = tokio::time::interval(Duration::from_secs(60));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut retry: Option<Duration> = None;
 
     loop {
         tokio::select! {
@@ -109,12 +112,23 @@ pub async fn run(engine: EngineHandle) {
                     continue;
                 }
                 known = now;
+                answered.retain(|id| known.iter().any(|(k, _)| k == id));
             }
             _ = ticker.tick() => {}
+            _ = async {
+                match retry {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending().await,
+                }
+            } => {}
         }
+        retry = None;
         for &(id, target) in &known {
             if let Some(extras) = poll_device(&engine, id, target).await {
+                answered.insert(id);
                 engine.send(Command::SetExtras(id, extras)).await;
+            } else if !answered.contains(&id) {
+                retry = Some(Duration::from_secs(15));
             }
         }
     }
