@@ -1,0 +1,5 @@
+# Keep LF everywhere; Git on Windows would otherwise convert to CRLF on checkout.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary

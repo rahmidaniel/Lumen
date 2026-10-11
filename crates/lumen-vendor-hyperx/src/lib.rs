@@ -98,24 +98,25 @@ fn query(dev: &HidDevice) -> Option<Battery> {
     None
 }
 
-/// Find `51 02 <percent> <phase> <source>` anywhere in the report.
+/// Parse a `51 02 <percent> <phase> <source>` report.
+///
+/// The header must start the report: the receiver also emits wrapped status
+/// packets (`ff 01 <12-byte id> 51 02 00 00 …`) that merely echo the command
+/// with zeroed data, and matching those would report a phantom 0 %.
 fn parse_reply(buf: &[u8]) -> Option<Battery> {
-    for i in 0..buf.len().saturating_sub(4) {
-        if buf[i] != 0x51 || buf[i + 1] != 0x02 {
-            continue;
-        }
-        let percent = buf[i + 2];
-        if percent > 100 {
-            continue;
-        }
-        let charging = match buf[i + 4] {
-            0x00 => true,  // on the cable
-            0xFF => false, // wireless
-            _ => matches!(buf[i + 3], 0x01 | 0x02),
-        };
-        return Some(Battery { percent, charging });
+    if buf.len() < 5 || buf[0] != 0x51 || buf[1] != 0x02 {
+        return None;
     }
-    None
+    let percent = buf[2];
+    if percent > 100 {
+        return None;
+    }
+    let charging = match buf[4] {
+        0x00 => true,  // on the cable
+        0xFF => false, // wireless
+        _ => matches!(buf[3], 0x01 | 0x02),
+    };
+    Some(Battery { percent, charging })
 }
 
 #[cfg(test)]
@@ -139,10 +140,11 @@ mod tests {
     }
 
     #[test]
-    fn ignores_garbage_and_offsets() {
+    fn ignores_garbage_wrappers_and_bad_values() {
         assert_eq!(parse_reply(&[0u8; 8]), None);
-        let r = [0x00, 0x00, 0x51, 0x02, 42, 0x00, 0xFF, 0x00];
-        assert_eq!(parse_reply(&r), Some(Battery { percent: 42, charging: false }));
+        // Wrapped echo seen on Windows: must not become "0 %, charging".
+        let wrapped = [0xff, 0x01, 0x9d, 0xb6, 0xcb, 0x70, 0xe1, 0x4e, 0x0d, 0x23, 0x53, 0x54, 0xf4, 0xad, 0x51, 0x02, 0, 0, 0, 0];
+        assert_eq!(parse_reply(&wrapped), None);
         let bad = [0x51, 0x02, 200, 0x00, 0xFF];
         assert_eq!(parse_reply(&bad), None);
     }
