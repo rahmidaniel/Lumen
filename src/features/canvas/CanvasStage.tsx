@@ -146,52 +146,86 @@ function drawBody(ctx: CanvasRenderingContext2D, g: DeviceGeometry, state: BodyS
   }
 }
 
+/** Trace a glyph's outline as the current path. */
+function glyphPath(ctx: CanvasRenderingContext2D, led: LedGlyph, inflate = 1) {
+  const g = led.glyph;
+  switch (g.type) {
+    case "key":
+      roundRectPath(ctx, led.x - (g.w * inflate) / 2, led.y - (g.h * inflate) / 2, g.w * inflate, g.h * inflate, Math.min(g.w, g.h) * 0.2);
+      break;
+    case "cell":
+      roundRectPath(ctx, led.x - (g.w * inflate) / 2, led.y - (g.h * inflate) / 2, g.w * inflate, g.h * inflate, Math.min(g.w, g.h) * 0.15);
+      break;
+    case "dot":
+      ctx.beginPath();
+      ctx.arc(led.x, led.y, g.r * inflate, 0, Math.PI * 2);
+      break;
+    case "strip":
+      ctx.beginPath();
+      g.points.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      break;
+  }
+}
+
+/** Crisp glyph, no blur — the glow is composited separately. */
 function drawGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb | null, s: number) {
   const lit = c ? Math.max(c[0], c[1], c[2]) / 255 : 0;
   const css = c && lit > 0.02 ? `rgb(${c[0]} ${c[1]} ${c[2]})` : UNLIT;
-  if (c && lit > 0.08) {
-    ctx.shadowColor = `rgb(${c[0]} ${c[1]} ${c[2]} / 0.9)`;
-    ctx.shadowBlur = 8 + 16 * lit;
-  } else {
-    ctx.shadowBlur = 0;
-  }
   const g = led.glyph;
-  switch (g.type) {
-    case "key": {
-      // Keycaps keep a dark base so unlit keys still read as keys.
-      const k = 0.92 * lit;
-      ctx.fillStyle = c ? `rgb(${Math.round(KEY_BASE[0] + (c[0] - KEY_BASE[0]) * k)} ${Math.round(KEY_BASE[1] + (c[1] - KEY_BASE[1]) * k)} ${Math.round(KEY_BASE[2] + (c[2] - KEY_BASE[2]) * k)})` : UNLIT;
-      roundRectPath(ctx, led.x - g.w / 2, led.y - g.h / 2, g.w, g.h, Math.min(g.w, g.h) * 0.2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.lineWidth = 1 / s;
-      ctx.strokeStyle = "rgb(255 255 255 / 0.07)";
-      ctx.stroke();
-      break;
-    }
-    case "cell":
-      ctx.fillStyle = css;
-      roundRectPath(ctx, led.x - g.w / 2, led.y - g.h / 2, g.w, g.h, Math.min(g.w, g.h) * 0.15);
-      ctx.fill();
-      break;
-    case "dot":
-      ctx.fillStyle = css;
-      ctx.beginPath();
-      ctx.arc(led.x, led.y, g.r, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    case "strip":
-      ctx.strokeStyle = css;
-      ctx.lineWidth = g.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      g.points.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      ctx.stroke();
-      break;
+  glyphPath(ctx, led);
+  if (g.type === "strip") {
+    ctx.strokeStyle = css;
+    ctx.lineWidth = g.width;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+    return;
   }
-  ctx.shadowBlur = 0;
+  if (g.type === "key") {
+    // Keycaps keep a dark base so unlit keys still read as keys.
+    const k = 0.92 * lit;
+    ctx.fillStyle = c ? `rgb(${Math.round(KEY_BASE[0] + (c[0] - KEY_BASE[0]) * k)} ${Math.round(KEY_BASE[1] + (c[1] - KEY_BASE[1]) * k)} ${Math.round(KEY_BASE[2] + (c[2] - KEY_BASE[2]) * k)})` : UNLIT;
+    ctx.fill();
+    ctx.lineWidth = 1 / s;
+    ctx.strokeStyle = "rgb(255 255 255 / 0.07)";
+    ctx.stroke();
+    return;
+  }
+  ctx.fillStyle = css;
+  ctx.fill();
 }
+
+/** Flat, slightly inflated glyph for the glow layer (blurred once per frame). */
+function drawGlowGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb) {
+  const lit = Math.max(c[0], c[1], c[2]) / 255;
+  if (lit < 0.08) return;
+  const css = `rgb(${c[0]} ${c[1]} ${c[2]} / ${(0.35 + 0.55 * lit).toFixed(2)})`;
+  glyphPath(ctx, led, 1.15);
+  if (led.glyph.type === "strip") {
+    ctx.strokeStyle = css;
+    ctx.lineWidth = led.glyph.width * 1.8;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = css;
+    ctx.fill();
+  }
+}
+
+/** Apply the world → device transform for one placement. */
+function enterDevice(ctx: CanvasRenderingContext2D, t: Transform, p: Placement) {
+  ctx.save();
+  ctx.translate(t.tx, t.ty);
+  ctx.scale(t.s, t.s);
+  ctx.translate(p.x + p.width / 2, p.y + p.height / 2);
+  ctx.rotate((p.rotation * Math.PI) / 180);
+  ctx.translate(-p.width / 2, -p.height / 2);
+}
+
+// Offscreen layer for the glow: every lit glyph is drawn flat here and the
+// whole layer is blurred once while compositing — one blur instead of one per LED.
+let glowLayer: HTMLCanvasElement | null = null;
 
 interface SceneState {
   placements: Record<string, Placement>;
@@ -213,29 +247,65 @@ function drawScene(
   const byDevice = new Map<number, number[]>();
   if (frame) for (const d of frame.devices) byDevice.set(d.id, d.rgb);
   const geometryById = new Map(st.geometry.map((g) => [g.device, g]));
-
-  const labels: { text: string; x: number; y: number; strong: boolean }[] = [];
-  for (const dev of st.devices) {
+  const colorOf = (rgb: number[] | undefined, led: LedGlyph): Rgb | null => {
+    const i = led.led * 3;
+    return rgb && i + 2 < rgb.length ? [rgb[i], rgb[i + 1], rgb[i + 2]] : null;
+  };
+  const placed = st.devices.flatMap((dev) => {
     const p = st.placements[String(dev.id)];
     const g = geometryById.get(dev.id);
-    if (!p || !g) continue;
-    const state: BodyState = dev.id === st.selected ? "selected" : dev.id === hover ? "hover" : "idle";
+    return p && g ? [{ dev, p, g, rgb: byDevice.get(dev.id) }] : [];
+  });
 
-    ctx.save();
-    ctx.translate(t.tx, t.ty);
-    ctx.scale(t.s, t.s);
-    ctx.translate(p.x + p.width / 2, p.y + p.height / 2);
-    ctx.rotate((p.rotation * Math.PI) / 180);
-    ctx.translate(-p.width / 2, -p.height / 2);
+  // Pass 1: bodies.
+  for (const { dev, p, g } of placed) {
+    const state: BodyState = dev.id === st.selected ? "selected" : dev.id === hover ? "hover" : "idle";
+    enterDevice(ctx, t, p);
     drawBody(ctx, g, state, t.s);
-    const rgb = byDevice.get(dev.id);
-    for (const led of g.leds) {
-      const i = led.led * 3;
-      const c: Rgb | null = rgb && i + 2 < rgb.length ? [rgb[i], rgb[i + 1], rgb[i + 2]] : null;
-      drawGlyph(ctx, led, c, t.s);
+    ctx.restore();
+  }
+
+  // Pass 2: glow — flat glyphs on an offscreen layer, blurred once on composite.
+  const dpr = window.devicePixelRatio || 1;
+  const supportsFilter = "filter" in ctx;
+  if (supportsFilter) {
+    glowLayer ??= document.createElement("canvas");
+    const gw = Math.max(1, Math.floor(width * dpr));
+    const gh = Math.max(1, Math.floor(height * dpr));
+    if (glowLayer.width !== gw || glowLayer.height !== gh) {
+      glowLayer.width = gw;
+      glowLayer.height = gh;
     }
+    const gctx = glowLayer.getContext("2d");
+    if (gctx) {
+      gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      gctx.clearRect(0, 0, width, height);
+      for (const { p, g, rgb } of placed) {
+        enterDevice(gctx, t, p);
+        for (const led of g.leds) {
+          const c = colorOf(rgb, led);
+          if (c) drawGlowGlyph(gctx, led, c);
+        }
+        gctx.restore();
+      }
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.filter = `blur(${Math.round(9 * dpr)}px)`;
+      ctx.drawImage(glowLayer, 0, 0);
+      ctx.restore();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+  }
+
+  // Pass 3: crisp glyphs and labels.
+  const labels: { text: string; x: number; y: number; strong: boolean }[] = [];
+  for (const { dev, p, g, rgb } of placed) {
+    enterDevice(ctx, t, p);
+    for (const led of g.leds) drawGlyph(ctx, led, colorOf(rgb, led), t.s);
     ctx.restore();
 
+    const state: BodyState = dev.id === st.selected ? "selected" : dev.id === hover ? "hover" : "idle";
     if (state !== "idle") {
       const [wx, wy] = toWorld(p, p.width / 2, 0);
       labels.push({ text: dev.display_name, x: t.tx + wx * t.s, y: t.ty + wy * t.s - 12, strong: state === "selected" });
@@ -270,9 +340,18 @@ export function CanvasStage() {
   const [ref, size] = useSize<HTMLDivElement>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const devices = snapshot?.devices ?? NO_DEVICES;
+  const rawDevices = snapshot?.devices ?? NO_DEVICES;
   const placements = snapshot?.scene.layout.placements ?? NO_PLACEMENTS;
   const geometry = snapshot?.geometry ?? NO_GEOMETRY;
+  // Z-order by footprint: big devices (the mat) at the back, small ones (the
+  // mouse) on top, so drawing and picking both favour the smaller device.
+  const devices = useMemo(() => {
+    const area = (d: DeviceInfo) => {
+      const p = placements[String(d.id)];
+      return p ? p.width * p.height : 0;
+    };
+    return [...rawDevices].sort((a, b) => area(b) - area(a));
+  }, [rawDevices, placements]);
   const fitT = useMemo(() => fit(Object.values(placements), size.width, size.height), [placements, size.width, size.height]);
 
   // Everything the draw loop needs, kept in refs so it never has to restart.
@@ -282,16 +361,24 @@ export function CanvasStage() {
   fitRef.current = fitT;
   const viewRef = useRef<Transform | null>(null); // null = follow the auto-fit
   const hoverRef = useRef<number | null>(null);
+  // Redraw only when something changed: a new frame, interaction, or state.
+  const dirtyRef = useRef(true);
+  dirtyRef.current = true;
   const [zoomPct, setZoomPct] = useState(100);
   const current = () => viewRef.current ?? fitRef.current;
+
+  useEffect(() => frames.subscribe(() => void (dirtyRef.current = true)), []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     let raf = 0;
+    let running = false;
     const draw = () => {
       raf = requestAnimationFrame(draw);
+      if (!dirtyRef.current) return;
+      dirtyRef.current = false;
       const dpr = window.devicePixelRatio || 1;
       const w = Math.floor(size.width * dpr);
       const h = Math.floor(size.height * dpr);
@@ -302,8 +389,24 @@ export function CanvasStage() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       drawScene(ctx, size.width, size.height, stateRef.current, viewRef.current ?? fitRef.current, frames.latest, hoverRef.current);
     };
-    draw();
-    return () => cancelAnimationFrame(raf);
+    const start = () => {
+      if (running) return;
+      running = true;
+      dirtyRef.current = true;
+      draw();
+    };
+    const stop = () => {
+      running = false;
+      cancelAnimationFrame(raf);
+    };
+    // No work at all while the window is hidden or minimised.
+    const onVisibility = () => (document.hidden ? stop() : start());
+    document.addEventListener("visibilitychange", onVisibility);
+    if (!document.hidden) start();
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [size.width, size.height]);
 
   // Wheel zoom needs a non-passive listener to stop the page from scrolling.
@@ -326,11 +429,13 @@ export function CanvasStage() {
     const s = Math.min(Math.max(t.s * factor, base * 0.2), base * 8);
     const k = s / t.s;
     viewRef.current = { s, tx: sx - (sx - t.tx) * k, ty: sy - (sy - t.ty) * k };
+    dirtyRef.current = true;
     setZoomPct(Math.round((s / base) * 100));
   };
   const zoomCenter = (factor: number) => zoomAt(factor, size.width / 2, size.height / 2);
   const fitView = () => {
     viewRef.current = null;
+    dirtyRef.current = true;
     setZoomPct(100);
   };
 
@@ -343,6 +448,7 @@ export function CanvasStage() {
     const wx = (sx - t.tx) / t.s;
     const wy = (sy - t.ty) / t.s;
     const { devices, placements } = stateRef.current;
+    // Devices are ordered big → small; test the topmost (smallest) first.
     for (let i = devices.length - 1; i >= 0; i--) {
       const p = placements[String(devices[i].id)];
       if (!p) continue;
@@ -371,10 +477,14 @@ export function CanvasStage() {
     const d = drag.current;
     if (!d) {
       const id = pick(sx, sy);
-      hoverRef.current = id;
+      if (id !== hoverRef.current) {
+        hoverRef.current = id;
+        dirtyRef.current = true;
+      }
       e.currentTarget.style.cursor = id !== null ? "grab" : "default";
       return;
     }
+    dirtyRef.current = true;
     if (d.kind === "device") {
       const { s } = current();
       setPlacement(d.id, { ...d.start, x: d.start.x + (sx - d.sx) / s, y: d.start.y + (sy - d.sy) / s }, false);

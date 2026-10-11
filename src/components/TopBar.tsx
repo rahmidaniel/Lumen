@@ -1,27 +1,62 @@
-import { Pause, Play } from "lucide-react";
+import { BatteryCharging, BatteryFull, BatteryLow, BatteryMedium, Cpu, Keyboard, Mouse, Pause, Play } from "lucide-react";
 import { useStore } from "../store";
 import { Badge, IconButton, cx } from "./ui";
+import type { Battery, DeviceInfo } from "../lib/types";
+
+const kindIcons: Record<string, typeof Cpu> = { keyboard: Keyboard, keypad: Keyboard, mouse: Mouse };
+
+function batteryIcon(b: Battery) {
+  if (b.charging) return BatteryCharging;
+  if (b.percent > 60) return BatteryFull;
+  if (b.percent > 25) return BatteryMedium;
+  return BatteryLow;
+}
+
+/** Compact battery chip: device-kind icon + percentage, full name on hover. */
+function BatteryChip({ device, battery }: { device: DeviceInfo; battery: Battery }) {
+  const Kind = kindIcons[device.kind_label] ?? Cpu;
+  const Level = batteryIcon(battery);
+  const tone = battery.charging ? "ok" : battery.percent <= 15 ? "danger" : battery.percent <= 30 ? "warn" : "neutral";
+  return (
+    <span title={`${device.display_name}: ${battery.percent}%${battery.charging ? ", charging" : ""}`}>
+      <Badge tone={tone} className="h-7 gap-1.5 px-2.5 text-xs">
+        <Kind size={13} />
+        <span className="font-semibold tabular-nums text-text">{battery.percent}%</span>
+        <Level size={13} className={cx(battery.charging && "text-ok")} />
+      </Badge>
+    </span>
+  );
+}
 
 export function TopBar() {
   const snapshot = useStore((s) => s.snapshot);
   const openrgb = useStore((s) => s.openrgb);
+  const setTab = useStore((s) => s.setTab);
   const setBrightness = useStore((s) => s.setBrightness);
   const setPaused = useStore((s) => s.setPaused);
 
   const connected = snapshot?.connected ?? false;
   const paused = snapshot?.paused ?? false;
   const brightness = snapshot?.scene.brightness ?? 1;
+  const powered = (snapshot?.devices ?? []).filter((d) => d.battery);
 
   let status: { tone: "ok" | "warn" | "danger"; text: string };
-  if (connected) status = { tone: "ok", text: `OpenRGB connected · ${snapshot?.devices.length ?? 0} devices` };
+  if (connected) status = { tone: "ok", text: `OpenRGB · ${snapshot?.devices.length ?? 0} devices` };
   else if (openrgb && !openrgb.exe) status = { tone: "danger", text: "OpenRGB not installed" };
   else status = { tone: "warn", text: "Connecting to OpenRGB…" };
 
   return (
-    <header className="flex items-center justify-between px-4 border-b border-border bg-surface/80 backdrop-blur">
+    <header className="flex items-center justify-between border-b border-border bg-surface/80 px-4 backdrop-blur">
       <div className="flex items-center gap-3">
         <span className="h-6 w-6 rounded-lg bg-[conic-gradient(from_200deg,#8b6cff,#22d3ee,#34d399,#fbbf24,#f87171,#8b6cff)] shadow-[0_0_24px_-4px_#8b6cff]" />
         <span className="text-[15px] font-semibold tracking-tight">Lumen</span>
+        {powered.length > 0 && (
+          <button className="ml-2 flex items-center gap-1.5" onClick={() => setTab("devices")} title="Open devices">
+            {powered.map((d) => (
+              <BatteryChip key={d.id} device={d} battery={d.battery!} />
+            ))}
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-4">

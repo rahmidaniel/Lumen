@@ -30,6 +30,7 @@ interface State {
   setPlacement(deviceId: number, placement: Placement, commit: boolean): void;
   setBrightness(brightness: number): void;
   setPaused(paused: boolean): void;
+  setFps(fps: number): void;
   refreshDevices(): Promise<void>;
   saveToDevice(deviceId: number, effect: OnboardEffect): Promise<void>;
   saveProfile(name: string): Promise<void>;
@@ -73,7 +74,7 @@ export const useStore = create<State>()((set, get) => ({
   snapshot: null,
   openrgb: null,
   profiles: [],
-  tab: "layers",
+  tab: "devices",
   selectedLayer: null,
   selectedDevice: null,
   error: null,
@@ -156,6 +157,10 @@ export const useStore = create<State>()((set, get) => ({
   setPaused(paused) {
     set((s) => (s.snapshot ? { snapshot: { ...s.snapshot, paused } } : {}));
     api().setPaused(paused).catch(fail(set));
+  },
+  setFps(fps) {
+    set((s) => (s.snapshot ? { snapshot: { ...s.snapshot, fps } } : {}));
+    api().setFps(fps).catch(fail(set));
   },
   async refreshDevices() {
     await api().refreshDevices().catch(fail(set));

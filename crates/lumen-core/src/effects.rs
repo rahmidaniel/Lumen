@@ -167,6 +167,16 @@ pub struct SampleCtx {
 }
 
 impl Effect {
+    /// Whether the output changes over time. Static effects are rendered once
+    /// and the engine idles until something edits the scene.
+    pub fn is_animated(&self) -> bool {
+        match self {
+            Effect::Static { .. } | Effect::Gradient { .. } => false,
+            Effect::Spectrum { speed } | Effect::Wave { speed, .. } | Effect::Breathing { speed, .. } => *speed != 0.0,
+            Effect::Starlight { .. } => true,
+        }
+    }
+
     pub fn sample(&self, ctx: &SampleCtx) -> Rgba {
         match self {
             Effect::Static { color } => Rgba::opaque(*color),

@@ -1,6 +1,6 @@
-import { BatteryCharging, BatteryFull, BatteryLow, BatteryMedium, Cpu, Fan, Gamepad2, Headphones, HardDriveDownload, Keyboard, Lightbulb, MemoryStick, Monitor, Mouse, RefreshCw, Square } from "lucide-react";
+import { BatteryCharging, Cpu, Fan, Gamepad2, Headphones, HardDriveDownload, Keyboard, Lightbulb, MemoryStick, Monitor, Mouse, RefreshCw, Square } from "lucide-react";
 import { useState } from "react";
-import { Badge, Button, ColorInput, Field, IconButton, NumberInput, Panel, Select, cx } from "../../components/ui";
+import { Badge, Button, ColorInput, Field, IconButton, Panel, Select, cx } from "../../components/ui";
 import type { Battery, DeviceInfo, OnboardEffect, Rgb } from "../../lib/types";
 import { useStore } from "../../store";
 
@@ -20,19 +20,32 @@ const icons: Record<string, typeof Cpu> = {
   gamepad: Gamepad2,
 };
 
-function BatteryBadge({ battery }: { battery: Battery }) {
-  const Icon = battery.charging ? BatteryCharging : battery.percent > 60 ? BatteryFull : battery.percent > 25 ? BatteryMedium : BatteryLow;
-  const tone = battery.charging ? "ok" : battery.percent <= 15 ? "danger" : battery.percent <= 30 ? "warn" : "neutral";
+export const batteryTone = (b: Battery): "ok" | "warn" | "danger" => (b.charging ? "ok" : b.percent <= 15 ? "danger" : b.percent <= 30 ? "warn" : "ok");
+
+function BatteryGauge({ battery }: { battery: Battery }) {
+  const tone = batteryTone(battery);
   return (
-    <Badge tone={tone}>
-      <Icon size={12} />
-      {battery.percent}%{battery.charging ? " · charging" : ""}
-    </Badge>
+    <div className="flex shrink-0 flex-col items-end gap-1.5" title={battery.charging ? "Charging" : "Battery"}>
+      <div className="flex items-center gap-1.5">
+        {battery.charging && <BatteryCharging size={16} className="text-ok" />}
+        <span className="text-2xl font-semibold leading-none tabular-nums">
+          {battery.percent}
+          <span className="ml-0.5 text-sm font-medium text-muted">%</span>
+        </span>
+      </div>
+      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-3">
+        <div
+          className={cx("h-full rounded-full transition-[width] duration-500", tone === "ok" ? "bg-ok" : tone === "warn" ? "bg-warn" : "bg-danger")}
+          style={{ width: `${Math.max(3, battery.percent)}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
 function DeviceCard({ device, active, onSelect }: { device: DeviceInfo; active: boolean; onSelect: () => void }) {
   const Icon = icons[device.kind_label] ?? Cpu;
+  const zones = device.zones.length;
   return (
     <button
       onClick={onSelect}
@@ -42,20 +55,20 @@ function DeviceCard({ device, active, onSelect }: { device: DeviceInfo; active: 
       )}
     >
       <div className="flex items-start gap-3">
-        <span className={cx("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md", active ? "bg-accent/20 text-[#c4b5fd]" : "bg-surface-3 text-muted")}>
-          <Icon size={16} />
+        <span className={cx("mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md", active ? "bg-accent/20 text-[#c4b5fd]" : "bg-surface-3 text-muted")}>
+          <Icon size={18} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{device.display_name}</div>
           <div className="truncate text-xs text-muted">
-            {device.vendor || device.kind_label} · {device.led_count} LEDs
+            {device.vendor || device.kind_label} · {device.led_count} LEDs · {zones} {zones === 1 ? "zone" : "zones"}
           </div>
           <div className="mt-2 flex flex-wrap gap-1">
             {device.streamable ? <Badge tone="ok">live</Badge> : <Badge tone="warn">no per-LED mode</Badge>}
             {device.onboard && <Badge tone="accent">onboard memory</Badge>}
-            {device.battery && <BatteryBadge battery={device.battery} />}
           </div>
         </div>
+        {device.battery && <BatteryGauge battery={device.battery} />}
       </div>
     </button>
   );
@@ -138,12 +151,10 @@ export function DevicesPanel() {
   const snapshot = useStore((s) => s.snapshot);
   const selected = useStore((s) => s.selectedDevice);
   const selectDevice = useStore((s) => s.selectDevice);
-  const setPlacement = useStore((s) => s.setPlacement);
   const refresh = useStore((s) => s.refreshDevices);
 
   const devices = snapshot?.devices ?? [];
   const device = devices.find((d) => d.id === selected) ?? null;
-  const placement = device ? snapshot?.scene.layout.placements[String(device.id)] : undefined;
 
   return (
     <Panel
@@ -161,22 +172,8 @@ export function DevicesPanel() {
         ))}
       </div>
 
-      {device && placement && (
+      {device && (
         <div className="mt-2 flex flex-col gap-4 rounded-lg border border-border bg-surface-2 p-3">
-          <div className="flex flex-col gap-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Placement (mm)</div>
-            <div className="grid grid-cols-2 gap-2">
-              {(["x", "y", "width", "height"] as const).map((k) => (
-                <Field key={k} label={k}>
-                  <NumberInput value={placement[k]} onChange={(v) => setPlacement(device.id, { ...placement, [k]: v }, true)} />
-                </Field>
-              ))}
-              <Field label="rotation °">
-                <NumberInput value={placement.rotation} onChange={(v) => setPlacement(device.id, { ...placement, rotation: v }, true)} />
-              </Field>
-            </div>
-          </div>
-
           <div className="flex flex-col gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted">Zones</div>
             <ul className="flex flex-col gap-1 text-xs">
@@ -187,6 +184,7 @@ export function DevicesPanel() {
                 </li>
               ))}
             </ul>
+            <p className="text-xs text-faint">Drag the device on the canvas to place it; scroll to zoom.</p>
           </div>
 
           {device.onboard === "razer" && <BootLighting device={device} />}
@@ -195,10 +193,6 @@ export function DevicesPanel() {
               OpenRGB can store these modes on this device: <span className="text-text">{device.saveable_modes.join(", ")}</span>. Saving them from Lumen is coming next.
             </p>
           )}
-
-          <p className="truncate font-mono text-[11px] text-faint" title={device.location}>
-            {device.location}
-          </p>
         </div>
       )}
     </Panel>

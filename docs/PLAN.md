@@ -84,11 +84,14 @@ lumen/
 - **Battery** — sidecar polls on connect and every 60 s. Razer: class 0x07, cmd 0x80 (level 0–255,
   response arg[1]) and cmd 0x84 (charging 0/1). Shown as a badge in the device list and the tray
   tooltip; low-battery notification.
-- **OpenRGB management** — locate the install (registry, known paths, PATH); start
-  `OpenRGB.exe --server --noautoconnect --startminimized` or attach to a running server/service;
-  reconnect with backoff; surface status in the UI. Detect Razer Synapse processes and warn, since
-  they fight over the same HID reports. Bundling OpenRGB in the installer is a later option
-  (GPLv2 — Lumen talks to it over TCP as a separate program, so Lumen itself can be MIT/Apache).
+- **OpenRGB management** — attach to a server that is already listening (the user's OpenRGB, or
+  the Windows service OpenRGB 1.0's installer registers); otherwise start the copy **bundled in the
+  installer** (`openrgb/OpenRGB.exe --server --server-host 127.0.0.1 --noautoconnect`, which runs
+  without any window or tray icon) and stop it on exit; fall back to a system install found on disk.
+  Reconnect with backoff; surface status in the UI. Detect Razer Synapse processes and warn, since
+  they fight over the same HID reports. OpenRGB is GPL-2.0-or-later and ships unmodified with its
+  licence text (`THIRD_PARTY_NOTICES.md`); Lumen talks to it over TCP as a separate program, so
+  Lumen itself stays MIT.
 - **IPC** — commands: `list_devices`, `set_placement`, `set_layers`, `save_profile`, `load_profile`,
   `save_to_device`, `openrgb_status`…; events: `devices_changed`, `preview_frame` (≤30 fps,
   typed-array payload), `battery_changed`, `openrgb_status`.
@@ -103,8 +106,8 @@ lumen/
 | M0 | Toolchain + scaffold | ✅ 2026-10-11 — Rust/Node/Build Tools installed; `npm run tauri dev` opens the Lumen window; all crates compile, 43 tests pass |
 | M1 | OpenRGB bridge + live preview | ✅ 2026-10-11 — attaches to the OpenRGB 1.0 service (protocol v6), 4 devices parsed, 60 fps wave across mat/keyboard/mouse/GPU, live preview with keycap/strip geometry |
 | M2 | Canvas, effects, profiles | ✅ (v1) — drag/zoom/pan canvas, six effects, blend modes, masks, profiles, scene autosave. Still to do: ripple/audio/ambient effects, LED-order editor for strips |
-| M3 | Device extras | 🟡 — DeathStalker battery via Razer sidecar (0x9F, stream hold) ✅; Strider "save to device" UI wired (VARSTORE) — verify by replug; HyperX battery sidecar written, verifying; no device exposes OpenRGB `MANUAL_SAVE`, so that path is moot; Synapse-conflict warning pending |
-| M4 | Ship | Tray + close-to-tray ✅; autostart, hotplug polish, settings, MSI/NSIS installer, release-profile CPU check, macOS/Linux CI pending |
+| M3 | Device extras | ✅ 2026-10-11 — DeathStalker battery (Razer sidecar, 0x9F on MI_02, stream hold) and Pulsefire battery (HyperX `51 02` reply) shown as gauges on the Devices home, top-bar chips and tray tooltip; Strider "save to device" (VARSTORE) confirmed by the user; no device exposes OpenRGB `MANUAL_SAVE`, so that path is moot. Pending: Synapse-running warning |
+| M4 | Ship | 🟡 — tray ✅; disposable window (close destroys the WebView, engine keeps running) ✅; autostart (`--hidden`) ✅; static-scene idle + visible-only preview frames + 30/60 fps setting ✅; **bundled OpenRGB** (fetched + SHA-256 pinned, launched as a silent server, stopped on exit) ✅; NSIS installer build in progress; still to do: release-profile CPU/memory numbers, hotplug polish, Synapse warning, macOS/Linux CI |
 
 ## Verification
 

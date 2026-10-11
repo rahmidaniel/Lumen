@@ -145,6 +145,8 @@ export interface Scene {
 export interface Snapshot {
   connected: boolean;
   paused: boolean;
+  /** Render/stream rate. */
+  fps: number;
   devices: DeviceInfo[];
   geometry: DeviceGeometry[];
   points: LedPoint[];

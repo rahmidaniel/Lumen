@@ -76,6 +76,8 @@ pub enum Command {
     Pause,
     Resume,
     RefreshDevices,
+    /// Change the render/stream rate (clamped to 15–120).
+    SetFps(u32),
     Shutdown,
 }
 
@@ -148,6 +150,8 @@ impl DeviceInfo {
 pub struct Snapshot {
     pub connected: bool,
     pub paused: bool,
+    /// Render/stream rate.
+    pub fps: u32,
     pub devices: Vec<DeviceInfo>,
     /// Body + LED glyphs per placed device, in local millimetres.
     pub geometry: Vec<DeviceGeometry>,
@@ -191,7 +195,7 @@ impl EngineHandle {
 /// Start the engine on the current Tokio runtime.
 pub fn spawn(config: EngineConfig, scene: Scene) -> EngineHandle {
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
-    let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(Snapshot { scene: scene.clone(), ..Default::default() }));
+    let (snapshot_tx, snapshot_rx) = watch::channel(Arc::new(Snapshot { fps: config.fps, scene: scene.clone(), ..Default::default() }));
     let (frames_tx, _) = broadcast::channel(4);
     let handle = EngineHandle { cmd: cmd_tx, snapshot: snapshot_rx, frames: frames_tx.clone() };
 
@@ -206,6 +210,8 @@ pub fn spawn(config: EngineConfig, scene: Scene) -> EngineHandle {
         last: Vec::new(),
         out: Vec::new(),
         paused: false,
+        dirty: true,
+        fps_changed: false,
         start: Instant::now(),
         last_preview: Instant::now(),
         reload_at: None,
@@ -229,6 +235,10 @@ struct Engine {
     last: Vec<Vec<Color>>,
     out: Vec<Vec<Color>>,
     paused: bool,
+    /// Something changed since the last render; static scenes render once and
+    /// then the tick returns immediately until this is set again.
+    dirty: bool,
+    fps_changed: bool,
     start: Instant,
     last_preview: Instant,
     /// Debounced device-list reload requested by the server.
@@ -238,14 +248,23 @@ struct Engine {
 }
 
 impl Engine {
-    async fn run(mut self, mut cmd_rx: mpsc::Receiver<Command>) {
-        let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / self.config.fps.max(1) as f64));
+    fn make_ticker(fps: u32) -> tokio::time::Interval {
+        let mut ticker = tokio::time::interval(Duration::from_secs_f64(1.0 / fps.max(1) as f64));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        ticker
+    }
+
+    async fn run(mut self, mut cmd_rx: mpsc::Receiver<Command>) {
+        let mut ticker = Self::make_ticker(self.config.fps);
         let mut events: Option<mpsc::UnboundedReceiver<Event>> = None;
         let mut next_connect = Instant::now();
         let mut backoff = Duration::from_secs(1);
 
         loop {
+            if self.fps_changed {
+                self.fps_changed = false;
+                ticker = Self::make_ticker(self.config.fps);
+            }
             if self.client.is_none() && Instant::now() >= next_connect {
                 match self.connect().await {
                     Ok(rx) => {
@@ -301,6 +320,7 @@ impl Engine {
             }
             Command::SetLayers(layers) => {
                 self.scene.layers = layers;
+                self.dirty = true;
                 self.publish();
             }
             Command::SetLayout(layout) => {
@@ -310,6 +330,12 @@ impl Engine {
             }
             Command::SetBrightness(b) => {
                 self.scene.brightness = b.clamp(0.0, 1.0);
+                self.dirty = true;
+                self.publish();
+            }
+            Command::SetFps(fps) => {
+                self.config.fps = fps.clamp(15, 120);
+                self.fps_changed = true;
                 self.publish();
             }
             Command::SetExtras(id, extras) => {
@@ -326,6 +352,7 @@ impl Engine {
                     if let Some(i) = self.devices.iter().position(|d| d.id == id) {
                         self.last[i].clear();
                     }
+                    self.dirty = true;
                 }
             }
             Command::Pause => {
@@ -335,6 +362,7 @@ impl Engine {
             Command::Resume => {
                 self.paused = false;
                 self.last.iter_mut().for_each(Vec::clear);
+                self.dirty = true;
                 self.publish();
             }
             Command::RefreshDevices => {
@@ -392,6 +420,7 @@ impl Engine {
         self.renderer = Renderer::new(&self.devices, &self.scene.layout);
         self.last = vec![Vec::new(); self.devices.len()];
         self.out = vec![Vec::new(); self.devices.len()];
+        self.dirty = true;
         self.publish();
     }
 
@@ -399,6 +428,7 @@ impl Engine {
         let snapshot = Snapshot {
             connected: self.client.is_some(),
             paused: self.paused,
+            fps: self.config.fps,
             devices: self.devices.iter().map(|d| DeviceInfo::from_device(d, self.extras.get(&d.id))).collect(),
             geometry: self.renderer.geometry().to_vec(),
             points: self.renderer.points().to_vec(),
@@ -421,6 +451,11 @@ impl Engine {
         if self.paused || self.devices.is_empty() {
             return;
         }
+        // A static scene is rendered once; afterwards the tick costs nothing.
+        if !self.dirty && !self.scene.is_animated() {
+            return;
+        }
+        self.dirty = false;
 
         let t = self.start.elapsed().as_secs_f64();
         self.renderer.render(&self.scene, t, &mut self.out);

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
+tauri-plugin-autostart = "2"
 lumen-core = { path = "../crates/lumen-core" }
 lumen-vendor-razer = { path = "../crates/lumen-vendor-razer" }
 lumen-vendor-hyperx = { path = "../crates/lumen-vendor-hyperx" }

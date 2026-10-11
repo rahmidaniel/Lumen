@@ -12,6 +12,7 @@ export interface Backend {
   setBrightness(brightness: number): Promise<void>;
   setScene(scene: Scene): Promise<void>;
   setPaused(paused: boolean): Promise<void>;
+  setFps(fps: number): Promise<void>;
   refreshDevices(): Promise<void>;
   /** Store `effect` as the device's power-on lighting. */
   saveToDevice(deviceId: number, effect: OnboardEffect): Promise<void>;
@@ -42,6 +43,7 @@ const tauriBackend: Backend = {
   setBrightness: (brightness) => invoke("set_brightness", { brightness }),
   setScene: (scene) => invoke("set_scene", { scene }),
   setPaused: (paused) => invoke("set_paused", { paused }),
+  setFps: (fps) => invoke("set_fps", { fps }),
   refreshDevices: () => invoke("refresh_devices"),
   saveToDevice: (deviceId, effect) => invoke("save_to_device", { deviceId, effect }),
   listProfiles: () => invoke<string[]>("list_profiles"),

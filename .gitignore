@@ -23,3 +23,6 @@ scripts/*.log
 .DS_Store
 Thumbs.db
 *.log
+
+# Bundled OpenRGB (fetched by scripts/fetch-openrgb.ps1)
+src-tauri/resources/openrgb/

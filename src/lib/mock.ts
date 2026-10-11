@@ -436,6 +436,7 @@ const defaultScene = (): Scene => ({
 let scene = defaultScene();
 let built = buildScene(scene.layout);
 let paused = false;
+let fps = 60;
 const profiles: Record<string, Scene> = { "Desk default": defaultScene() };
 const snapshotListeners = new Set<(s: Snapshot) => void>();
 const frameListeners = new Set<(f: FramePayload) => void>();
@@ -446,6 +447,7 @@ const publicDevices: DeviceInfo[] = devices.map(({ matrix: _m, names: _n, ...inf
 const snapshot = (): Snapshot => ({
   connected: true,
   paused,
+  fps,
   devices: publicDevices,
   geometry: built.geometry,
   points: built.points,
@@ -485,6 +487,10 @@ export const mock: Backend = {
   },
   async setPaused(p) {
     paused = p;
+    publish();
+  },
+  async setFps(f) {
+    fps = Math.min(120, Math.max(15, Math.round(f)));
     publish();
   },
   async refreshDevices() {

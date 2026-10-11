@@ -82,6 +82,13 @@ pub struct Scene {
     pub brightness: f32,
 }
 
+impl Scene {
+    /// Whether any visible layer changes over time.
+    pub fn is_animated(&self) -> bool {
+        self.layers.iter().filter(|l| l.enabled && l.opacity > 0.0).any(|l| l.effect.is_animated())
+    }
+}
+
 impl Default for Scene {
     /// A rainbow wave sweeping left to right across everything — the first-run look.
     fn default() -> Self {
@@ -152,6 +159,19 @@ mod tests {
         assert!(minimal.layers[0].enabled);
         assert_eq!(minimal.layers[0].opacity, 1.0);
         assert_eq!(minimal.brightness, 1.0);
+    }
+
+    #[test]
+    fn animated_detection() {
+        assert!(Scene::default().is_animated(), "the default wave moves");
+        let mut scene = Scene { layers: vec![Layer::new("solid", Effect::Static { color: Rgb::WHITE })], ..Scene::default() };
+        assert!(!scene.is_animated());
+        scene.layers.push(Layer::new("still wave", Effect::Wave { angle: 0.0, speed: 0.0, wavelength: 1.0, palette: Palette::Rainbow }));
+        assert!(!scene.is_animated(), "a wave with zero speed is static");
+        scene.layers[1].effect = Effect::Breathing { color: Rgb::WHITE, speed: 0.5 };
+        assert!(scene.is_animated());
+        scene.layers[1].enabled = false;
+        assert!(!scene.is_animated(), "disabled layers do not count");
     }
 
     #[test]
