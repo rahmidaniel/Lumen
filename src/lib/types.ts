@@ -12,6 +12,8 @@ export interface Battery {
   /** 0–100. */
   percent: number;
   charging: boolean;
+  /** Cell voltage when the device reports one. */
+  millivolts?: number | null;
 }
 
 /** How a device can keep a power-on effect in its own memory. */

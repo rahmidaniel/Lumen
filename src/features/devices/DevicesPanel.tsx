@@ -22,10 +22,13 @@ const icons: Record<string, typeof Cpu> = {
 
 export const batteryTone = (b: Battery): "ok" | "warn" | "danger" => (b.charging ? "ok" : b.percent <= 15 ? "danger" : b.percent <= 30 ? "warn" : "ok");
 
+export const volts = (b: Battery) => (b.millivolts ? `${(b.millivolts / 1000).toFixed(2)} V` : null);
+
 function BatteryGauge({ battery }: { battery: Battery }) {
   const tone = batteryTone(battery);
+  const v = volts(battery);
   return (
-    <div className="flex shrink-0 flex-col items-end gap-1.5" title={battery.charging ? "Charging" : "Battery"}>
+    <div className="flex shrink-0 flex-col items-end gap-1.5" title={`${battery.charging ? "Charging" : "Battery"}${v ? ` · cell ${v}` : ""}`}>
       <div className="flex items-center gap-1.5">
         {battery.charging && <BatteryCharging size={16} className="text-ok" />}
         <span className="text-2xl font-semibold leading-none tabular-nums">
@@ -39,6 +42,7 @@ function BatteryGauge({ battery }: { battery: Battery }) {
           style={{ width: `${Math.max(3, battery.percent)}%` }}
         />
       </div>
+      {v && <span className="font-mono text-[10px] tabular-nums text-faint">{v}</span>}
     </div>
   );
 }

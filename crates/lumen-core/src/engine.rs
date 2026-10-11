@@ -41,6 +41,9 @@ pub struct Battery {
     /// 0–100.
     pub percent: u8,
     pub charging: bool,
+    /// Cell voltage when the device reports one (HyperX does).
+    #[serde(default)]
+    pub millivolts: Option<u16>,
 }
 
 /// How a device can keep a power-on effect in its own memory.

@@ -154,9 +154,14 @@ Vendor interface = USB interface 2 (`HID_PHYS … input2`). Reports are unnumber
 The mouse also sends an unsolicited 11-byte report on plug/unplug (`+6 == 0x03`, battery at +1, power at +4).
 Another project reports PID 0x0B97 for a Haste 2 variant. Implemented in `crates/lumen-vendor-hyperx`.
 
-**Verified on Windows (2026-10-11):** the receiver's `MI_02` collection uses numbered reports (0x50 is the report ID, so
-the 64 bytes are written as-is; the 65-byte unnumbered framing is rejected). While the mouse is awake the receiver
-floods the interface with status pairs `45 47 00 ff 00 …` and `ff 01 <12-byte id> 45 47 …` (~100/s). The real answer is
-a separate report that *starts* with `51 02`, ~20 ms after the request, e.g. `51 02 62 00 19 00 3b 0f 01 …` = 98 %,
-not charging. The receiver also emits `ff 01 <id> 51 02 00 00 …` — an echo with zeroed data — which must be ignored or it
-reads as "0 %, charging". A sleeping mouse (idle ≳ 10 min) answers nothing; keep the last reading.
+**Verified on Windows (2026-10-11/12):** the receiver's `MI_02` collection uses numbered reports (0x50 is the report ID,
+so the 64 bytes are written as-is; the 65-byte unnumbered framing is rejected). HyperX framing (per
+https://github.com/fspy/haste2ctl): request report ID `N`, sub-command in byte 1 → reply report ID `N+1` with the same
+sub-command (`50 02` → `51 02`, like `40 02` → `41 02` for brightness); `ff 01 <14-byte header> <echoed id/sub>` frames
+are ACKs; `45 xx` reports are unsolicited notifications. While the mouse is awake the receiver floods the interface with
+`45 47 00 ff …` / `ff 01 … 45 47` pairs (~100/s); the `ff 01 … 51 02 00 00` ACK must not be parsed as data (it reads as
+"0 %, charging"). The real answer starts with `51 02`, ~20 ms after the request. Observed payload over ~80 minutes:
+`62 00 19|1a 00 39 0f 01 …` — +2 = 98 constant (the percentage, as the community tools read it), +3 = 0 (charge phase),
++4 = 25→26 creeping up (looks like a temperature, not a percentage), +6..7 LE = 3896–3910 mV, moving with load (cell
+voltage, probably measured after a diode drop given 98 %). A sleeping mouse (idle ≳ 1–10 min) answers nothing; keep the
+last reading. Lumen shows the voltage next to the percentage so the +2 reading can be sanity-checked over time.

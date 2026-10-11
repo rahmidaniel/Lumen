@@ -107,7 +107,7 @@ const devices: MockDevice[] = [
     ],
     saveable_modes: [],
     streamable: true,
-    battery: { percent: 100, charging: true },
+    battery: { percent: 98, charging: false, millivolts: 3897 },
     onboard: null,
     names: ["Scroll wheel", "Logo"],
   },

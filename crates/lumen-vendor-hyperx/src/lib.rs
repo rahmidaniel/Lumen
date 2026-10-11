@@ -22,9 +22,12 @@ pub mod pid {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Battery {
-    /// 0–100.
+    /// 0–100 (byte +2 of the reply, as the community tools read it).
     pub percent: u8,
     pub charging: bool,
+    /// Bytes +6..+7 little-endian; on the Haste 2 Wireless this sits around
+    /// 3.9 V and moves with load, so it is the cell voltage (`None` if implausible).
+    pub millivolts: Option<u16>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -98,11 +101,14 @@ fn query(dev: &HidDevice) -> Option<Battery> {
     None
 }
 
-/// Parse a `51 02 <percent> <phase> <source>` report.
+/// Parse a `51 02 <percent> <phase> <?> <?> <mV lo> <mV hi> …` report.
 ///
-/// The header must start the report: the receiver also emits wrapped status
-/// packets (`ff 01 <12-byte id> 51 02 00 00 …`) that merely echo the command
-/// with zeroed data, and matching those would report a phantom 0 %.
+/// The header must start the report: the receiver also emits ACK frames
+/// (`ff 01 <12-byte id> 51 02 00 00 …`) that merely echo the command with
+/// zeroed data, and matching those would report a phantom 0 %.
+///
+/// Observed on a Haste 2 Wireless (2026-10-12): `62 00 1a 00 39 0f 01` —
+/// +2 = 98, +3 = 0, +4 slowly rising 25→26 (looks like °C), +6..7 = 3897 mV.
 fn parse_reply(buf: &[u8]) -> Option<Battery> {
     if buf.len() < 5 || buf[0] != 0x51 || buf[1] != 0x02 {
         return None;
@@ -111,12 +117,13 @@ fn parse_reply(buf: &[u8]) -> Option<Battery> {
     if percent > 100 {
         return None;
     }
-    let charging = match buf[4] {
-        0x00 => true,  // on the cable
-        0xFF => false, // wireless
-        _ => matches!(buf[3], 0x01 | 0x02),
-    };
-    Some(Battery { percent, charging })
+    // Phase byte: 0x01 plugged / 0x02 charging per the community daemon; the
+    // old "+4 == 0x00 means wired" rule is wrong for this firmware (+4 is ~25).
+    let charging = matches!(buf[3], 0x01 | 0x02);
+    let millivolts = (buf.len() >= 8)
+        .then(|| u16::from_le_bytes([buf[6], buf[7]]))
+        .filter(|mv| (2500..=4600).contains(mv));
+    Some(Battery { percent, charging, millivolts })
 }
 
 #[cfg(test)]
@@ -124,25 +131,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_active_reply() {
-        let mut r = [0u8; 64];
-        r[0] = 0x51;
-        r[1] = 0x02;
-        r[2] = 87;
-        r[3] = 0x00;
-        r[4] = 0xFF;
-        assert_eq!(parse_reply(&r), Some(Battery { percent: 87, charging: false }));
-        r[4] = 0x00;
-        assert_eq!(parse_reply(&r), Some(Battery { percent: 87, charging: true }));
-        r[4] = 0x10;
-        r[3] = 0x01;
-        assert_eq!(parse_reply(&r), Some(Battery { percent: 87, charging: true }));
+    fn parses_observed_reply() {
+        // Captured from a Haste 2 Wireless: 98 %, not charging, 3897 mV.
+        let r = [0x51, 0x02, 0x62, 0x00, 0x1a, 0x00, 0x39, 0x0f, 0x01, 0x00, 0x00, 0x00];
+        assert_eq!(parse_reply(&r), Some(Battery { percent: 98, charging: false, millivolts: Some(3897) }));
+        let mut charging = r;
+        charging[3] = 0x02;
+        assert_eq!(parse_reply(&charging).unwrap().charging, true);
+        // Implausible voltage word → no voltage.
+        let mut no_volts = r;
+        no_volts[6] = 0x00;
+        no_volts[7] = 0x00;
+        assert_eq!(parse_reply(&no_volts).unwrap().millivolts, None);
     }
 
     #[test]
     fn ignores_garbage_wrappers_and_bad_values() {
         assert_eq!(parse_reply(&[0u8; 8]), None);
-        // Wrapped echo seen on Windows: must not become "0 %, charging".
+        // ACK frame seen on Windows: must not become "0 %, charging".
         let wrapped = [0xff, 0x01, 0x9d, 0xb6, 0xcb, 0x70, 0xe1, 0x4e, 0x0d, 0x23, 0x53, 0x54, 0xf4, 0xad, 0x51, 0x02, 0, 0, 0, 0];
         assert_eq!(parse_reply(&wrapped), None);
         let bad = [0x51, 0x02, 200, 0x00, 0xFF];

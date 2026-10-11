@@ -144,7 +144,7 @@ async fn poll_device(engine: &EngineHandle, id: u32, target: Target) -> Option<D
                 let battery = match dev.battery() {
                     Ok(b) => {
                         tracing::info!(pid = format_args!("{pid:#06x}"), percent = b.percent, charging = b.charging, "battery");
-                        Some(Battery { percent: b.percent, charging: b.charging })
+                        Some(Battery { percent: b.percent, charging: b.charging, millivolts: None })
                     }
                     Err(e) => {
                         tracing::debug!(pid = format_args!("{pid:#06x}"), %e, "no battery reading");
@@ -155,8 +155,11 @@ async fn poll_device(engine: &EngineHandle, id: u32, target: Target) -> Option<D
             }
             Target::HyperX(pid) => {
                 let b = lumen_vendor_hyperx::read_battery(&api, pid).map_err(|e| e.to_string())?;
-                tracing::info!(pid = format_args!("{pid:#06x}"), percent = b.percent, charging = b.charging, "battery");
-                Ok(DeviceExtras { battery: Some(Battery { percent: b.percent, charging: b.charging }), onboard: None })
+                tracing::info!(pid = format_args!("{pid:#06x}"), percent = b.percent, charging = b.charging, millivolts = ?b.millivolts, "battery");
+                Ok(DeviceExtras {
+                    battery: Some(Battery { percent: b.percent, charging: b.charging, millivolts: b.millivolts }),
+                    onboard: None,
+                })
             }
         }
     })

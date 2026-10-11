@@ -17,8 +17,9 @@ function BatteryChip({ device, battery }: { device: DeviceInfo; battery: Battery
   const Kind = kindIcons[device.kind_label] ?? Cpu;
   const Level = batteryIcon(battery);
   const tone = battery.charging ? "ok" : battery.percent <= 15 ? "danger" : battery.percent <= 30 ? "warn" : "neutral";
+  const v = battery.millivolts ? ` · ${(battery.millivolts / 1000).toFixed(2)} V` : "";
   return (
-    <span title={`${device.display_name}: ${battery.percent}%${battery.charging ? ", charging" : ""}`}>
+    <span title={`${device.display_name}: ${battery.percent}%${battery.charging ? ", charging" : ""}${v}`}>
       <Badge tone={tone} className="h-7 gap-1.5 px-2.5 text-xs">
         <Kind size={13} />
         <span className="font-semibold tabular-nums text-text">{battery.percent}%</span>
