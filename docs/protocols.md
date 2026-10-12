@@ -226,6 +226,16 @@ while charging). 0x1001 BATTERY_VOLTAGE fn 0: +0..1 mV big-endian, +2 flags (bit
 0 charging / 1 full / 2 stopped / 7 error, valid only with bit 7; bit 3 fast, bit 4 slow); percent from Solaar's 13-point
 discharge curve (4186 mV = 100 % … 3500 mV = 0 %).
 
+**Settings** (Solaar `settings_templates.py`, untested): 0x2201 ADJUSTABLE_DPI — fn 1 list (`sensor, 0, page`; after the
+sensor byte, u16 BE values ending in 0, a value with the top three bits set is a step `& 0x1FFF` up to the next value),
+fn 2 current (`sensor, dpi, default`; 0 = default), fn 3 set (`sensor, dpi`). 0x2202 EXTENDED_ADJUSTABLE_DPI — fn 1
+capabilities (byte 2: bit 0 separate Y, bit 1 lift-off), fn 2 list after three bytes, fn 5 read (`sensor, x, default x,
+y, default y, lod`), fn 6 write (`sensor, x, y[, lod]`). 0x8060 REPORT_RATE — fn 0 flags (bit i = (i + 1) ms), fn 1
+current ms, fn 2 set. 0x8061 EXTENDED_ADJUSTABLE_REPORT_RATE — fn 1 u16 flags (bit i = 8, 4, 2, 1 ms, 500, 250, 125 µs),
+fn 2 current code, fn 3 set. 0x8100 ONBOARD_PROFILES — fn 2 reads 1 while an onboard profile overrides DPI and report
+rate, fn 1 sets 1 (onboard) or 2 (host). Lumen applies settings to the first receiver slot whose device has any of
+these features.
+
 ### Glorious CORE v1 wireless mice (258A)
 
 Sources: korkje/mxw `src/report/battery.rs`, dkbednarczyk/mxw `src/util/status.rs`, AwesomeTy18/GloriousBatteryMonitor

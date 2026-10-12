@@ -41,7 +41,8 @@ together, and one place to see battery levels and manage devices.
   you do. A lights switch sits in the top bar, the tray and an optional shortcut. (Windows
   for now.)
 - **Device settings.** Polling rate, DPI stages, sleep timer and power saving on Razer
-  devices and the HyperX Pulsefire Haste 2: the things you used to keep the vendor app for.
+  devices and the HyperX Pulsefire Haste 2, DPI and report rate on Logitech mice: the
+  things you used to keep the vendor app for.
 - **Boot lighting.** Where the hardware has onboard memory (Razer so far), Lumen writes the
   effect the device shows before any software has started.
 - **Profiles** for saving and switching whole scenes, from the app, the tray menu or the
@@ -92,7 +93,7 @@ Things OpenRGB does not do, Lumen does itself, per vendor:
 |---|---|---|---|---|
 | Razer | ✅ | polling rate, DPI stages, sleep timer, power saving | ✅ | tested on hardware; mouse DPI follows OpenRazer, no Razer mouse tried yet |
 | HyperX Pulsefire Haste 2 | ✅ | polling rate, DPI stages | – | tested on hardware |
-| Logitech (HID++, Lightspeed/Unifying) | ✅ | – | – | from published protocol, untested |
+| Logitech (HID++, Lightspeed/Unifying) | ✅ | DPI, report rate, onboard profile on/off | – | from published protocol (Solaar), untested |
 | Corsair (Bragi and legacy wireless) | ✅ | – | – | from published protocol, untested |
 | SteelSeries (Aerox, Prime, Rival) | ✅ | – | – | from published protocol, untested |
 | ASUS ROG wireless mice | ✅ | – | – | from published protocol, untested |

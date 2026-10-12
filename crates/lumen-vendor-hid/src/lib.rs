@@ -2,8 +2,9 @@
 //! request/reply HID protocol: Logitech (HID++ 2.0), Glorious, ASUS ROG,
 //! SteelSeries and Corsair.
 //!
-//! Everything here is read-only: one vendor query per poll, strict reply
-//! matching, no writes to device settings. The protocols come from the
+//! Battery reads are read-only: one vendor query per poll, strict reply
+//! matching. The one writer is `logitech::write_setting` (DPI, report rate,
+//! onboard profile), which only runs when the user changes a setting. The protocols come from the
 //! open-source tools cited in each module (and in `docs/protocols.md`); none
 //! of these devices were on hand when this was written, so every module is
 //! deliberately conservative about what it accepts as an answer and reports

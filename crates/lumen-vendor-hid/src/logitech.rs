@@ -1,5 +1,6 @@
-//! Logitech HID++ 2.0 battery readout (vendor ID 0x046D): G-series mice and
-//! keyboards, on the cable or through a Lightspeed / Unifying receiver.
+//! Logitech HID++ 2.0 (vendor ID 0x046D): battery readout and mouse settings
+//! (DPI, report rate, onboard profile) for G-series devices, on the cable or
+//! through a Lightspeed / Unifying receiver.
 //!
 //! Framing (Solaar `lib/logitech_receiver/base.py`, Linux
 //! `hid-logitech-hidpp.c`, libratbag `hidpp20.c`, cvuchener/hidpp): a 20-byte
@@ -341,9 +342,266 @@ pub(crate) fn voltage_percent(mv: u16) -> u8 {
     0
 }
 
+// ---- device settings ---------------------------------------------------------
+//
+// From Solaar `lib/logitech_receiver/settings_templates.py` (no Logitech device was
+// on hand when this was written):
+// * 0x2201 ADJUSTABLE_DPI: fn 1 getSensorDpiList(sensor, 0, page) answers, after
+//   the sensor byte, u16 BE values ending in 0; a value with its top three bits
+//   set is a step (`& 0x1FFF`) up to the value after it. fn 2 getSensorDpi(sensor)
+//   → `sensor, dpi, default dpi` (dpi 0 = the default). fn 3 setSensorDpi(sensor, dpi).
+// * 0x2202 EXTENDED_ADJUSTABLE_DPI: fn 1 capabilities(sensor) → byte 2 bit 0 = a
+//   separate Y axis, bit 1 = lift-off distance; fn 2 the list (sensor, axis, page)
+//   after three bytes; fn 5 read → `sensor, x, default x, y, default y, lod`;
+//   fn 6 write(sensor, x, y, lod).
+// * 0x8060 REPORT_RATE: fn 0 → bit i set = (i + 1) ms offered; fn 1 → ms; fn 2 set.
+// * 0x8061 EXTENDED_ADJUSTABLE_REPORT_RATE: fn 1 → u16 BE flags, bit i = code i
+//   (8 ms, 4, 2, 1, 500 µs, 250, 125); fn 2 → code; fn 3 set.
+// * 0x8100 ONBOARD_PROFILES: fn 2 → 1 while an onboard profile is in control (it
+//   overrides DPI and report rate); fn 1 set(1 onboard, 2 host).
+
+const FEATURE_ADJUSTABLE_DPI: u16 = 0x2201;
+const FEATURE_EXTENDED_DPI: u16 = 0x2202;
+const FEATURE_REPORT_RATE: u16 = 0x8060;
+const FEATURE_EXTENDED_REPORT_RATE: u16 = 0x8061;
+const FEATURE_ONBOARD_PROFILES: u16 = 0x8100;
+const EXTENDED_RATES_HZ: [u32; 7] = [125, 250, 500, 1000, 2000, 4000, 8000];
+
+/// DPI and report rate of a Logitech mouse, as far as it has them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Settings {
+    /// Current DPI and every value the sensor takes, ascending.
+    pub dpi: Option<(u32, Vec<u32>)>,
+    /// Current report rate and the offered ones, in Hz, fastest first.
+    pub report_rate: Option<(u32, Vec<u32>)>,
+    /// `Some(true)` while an onboard profile (set up in G HUB) is in control and
+    /// overrides the two above.
+    pub onboard_profile: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SettingFeatures {
+    dpi: Option<u8>,
+    extended_dpi: Option<u8>,
+    rate: Option<u8>,
+    extended_rate: Option<u8>,
+    profiles: Option<u8>,
+}
+
+impl SettingFeatures {
+    fn any(&self) -> bool {
+        self.dpi.is_some() || self.extended_dpi.is_some() || self.rate.is_some() || self.extended_rate.is_some()
+    }
+}
+
+/// Expand a DPI list: plain values, and `0xE000 | step` markers between two values.
+pub(crate) fn parse_dpi_list(bytes: &[u8]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        let val = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
+        if val == 0 {
+            break;
+        }
+        if val >> 13 == 0b111 {
+            let step = u32::from(val & 0x1FFF);
+            let last = bytes.get(i + 2..i + 4).map(|b| u32::from(u16::from_be_bytes([b[0], b[1]])));
+            let (Some(&prev), Some(last)) = (out.last(), last) else { break };
+            if step == 0 || last <= prev {
+                break;
+            }
+            out.extend((prev + step..=last).step_by(step as usize));
+            i += 4;
+        } else {
+            out.push(u32::from(val));
+            i += 2;
+        }
+    }
+    out
+}
+
+/// 0x8060's flags: bit i → (i + 1) ms → Hz, fastest first.
+pub(crate) fn report_rates(flags: u8) -> Vec<u32> {
+    (0..8u32).filter(|i| flags >> i & 1 == 1).map(|i| 1000 / (i + 1)).collect()
+}
+
+/// 0x8061's flags: bit i → `EXTENDED_RATES_HZ[i]`, fastest first.
+pub(crate) fn extended_report_rates(flags: u16) -> Vec<u32> {
+    let mut rates: Vec<u32> = (0..7usize).filter(|&i| flags >> i & 1 == 1).map(|i| EXTENDED_RATES_HZ[i]).collect();
+    rates.reverse();
+    rates
+}
+
+fn setting_features(link: &Link, index: u8) -> Result<SettingFeatures> {
+    Ok(SettingFeatures {
+        dpi: get_feature(link, index, FEATURE_ADJUSTABLE_DPI)?,
+        extended_dpi: get_feature(link, index, FEATURE_EXTENDED_DPI)?,
+        rate: get_feature(link, index, FEATURE_REPORT_RATE)?,
+        extended_rate: get_feature(link, index, FEATURE_EXTENDED_REPORT_RATE)?,
+        profiles: get_feature(link, index, FEATURE_ONBOARD_PROFILES)?,
+    })
+}
+
+/// The receiver slot (0xFF on the cable) of the first linked device with settings.
+fn settings_slot(link: &Link, pid: u16) -> Result<(u8, SettingFeatures)> {
+    let slots: &[u8] = if is_receiver(pid) { &[1, 2, 3, 4, 5, 6, 7] } else { &[0xFF] };
+    let mut asleep = false;
+    for &index in slots {
+        let first = Duration::from_millis(if index == 0xFF { 1000 } else { 2000 });
+        match ping(link, index, first) {
+            Ok(()) => {
+                let features = setting_features(link, index)?;
+                if features.any() {
+                    return Ok((index, features));
+                }
+            }
+            Err(Error::NothingPaired) => continue,
+            Err(Error::Asleep) | Err(Error::Busy) => asleep = true,
+            Err(_) => continue,
+        }
+    }
+    Err(if asleep { Error::Asleep } else { Error::Unsupported(pid) })
+}
+
+/// The pages of a DPI list request, joined after skipping `skip` bytes of each.
+fn dpi_list(link: &Link, index: u8, feature: u8, function: u8, skip: usize) -> Result<Vec<u32>> {
+    let mut bytes = Vec::new();
+    for page in 0..8u8 {
+        let p = link.request(index, feature, function, &[0x00, 0x00, page], Duration::from_millis(500))?;
+        bytes.extend_from_slice(&p[skip.min(16)..]);
+        if bytes.ends_with(&[0, 0]) {
+            break;
+        }
+    }
+    Ok(parse_dpi_list(&bytes))
+}
+
+fn read_settings_with(link: &Link, index: u8, f: &SettingFeatures) -> Result<Settings> {
+    let t = Duration::from_millis(500);
+    let mut s = Settings::default();
+    let current = |p: [u8; 16]| match u16::from_be_bytes([p[1], p[2]]) {
+        0 => u32::from(u16::from_be_bytes([p[3], p[4]])),
+        d => u32::from(d),
+    };
+    if let Some(fi) = f.extended_dpi {
+        let list = dpi_list(link, index, fi, 2, 3)?;
+        let x = current(link.request(index, fi, 5, &[0x00], t)?);
+        if !list.is_empty() {
+            s.dpi = Some((x, list));
+        }
+    } else if let Some(fi) = f.dpi {
+        let list = dpi_list(link, index, fi, 1, 1)?;
+        let dpi = current(link.request(index, fi, 2, &[0x00], t)?);
+        if !list.is_empty() {
+            s.dpi = Some((dpi, list));
+        }
+    }
+    if let Some(fi) = f.extended_rate {
+        let flags = link.request(index, fi, 1, &[], t)?;
+        let code = link.request(index, fi, 2, &[], t)?[0];
+        if let Some(&hz) = EXTENDED_RATES_HZ.get(usize::from(code)) {
+            s.report_rate = Some((hz, extended_report_rates(u16::from_be_bytes([flags[0], flags[1]]))));
+        }
+    } else if let Some(fi) = f.rate {
+        let flags = link.request(index, fi, 0, &[], t)?[0];
+        let ms = link.request(index, fi, 1, &[], t)?[0];
+        if ms > 0 {
+            s.report_rate = Some((1000 / u32::from(ms), report_rates(flags)));
+        }
+    }
+    if let Some(fi) = f.profiles {
+        s.onboard_profile = Some(link.request(index, fi, 2, &[], t)?[0] == 0x01);
+    }
+    Ok(s)
+}
+
+/// Read DPI, report rate and the onboard-profile state of the device behind `pid`.
+pub fn read_settings(api: &HidApi, pid: u16) -> Result<Settings> {
+    let link = Link::open(api, pid)?;
+    let (index, f) = settings_slot(&link, pid)?;
+    read_settings_with(&link, index, &f)
+}
+
+/// What to change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingChange {
+    Dpi(u32),
+    ReportRate(u32),
+    /// `true` hands control to the mouse's onboard profile, `false` to the host.
+    OnboardProfile(bool),
+}
+
+/// Apply one change and read everything back.
+pub fn write_setting(api: &HidApi, pid: u16, change: SettingChange) -> Result<Settings> {
+    let link = Link::open(api, pid)?;
+    let (index, f) = settings_slot(&link, pid)?;
+    let t = Duration::from_millis(500);
+    match change {
+        SettingChange::Dpi(dpi) => {
+            let dpi = u16::try_from(dpi).map_err(|_| Error::Protocol(format!("{dpi} DPI is out of range")))?;
+            if let Some(fi) = f.extended_dpi {
+                let caps = link.request(index, fi, 1, &[0x00], t)?;
+                let now = link.request(index, fi, 5, &[0x00], t)?;
+                let y = if caps[2] & 0x01 != 0 { dpi } else { 0 };
+                let mut params = vec![0x00];
+                params.extend_from_slice(&dpi.to_be_bytes());
+                params.extend_from_slice(&y.to_be_bytes());
+                if caps[2] & 0x02 != 0 {
+                    params.push(now[9]);
+                }
+                link.request(index, fi, 6, &params, t)?;
+            } else if let Some(fi) = f.dpi {
+                let [hi, lo] = dpi.to_be_bytes();
+                link.request(index, fi, 3, &[0x00, hi, lo], t)?;
+            } else {
+                return Err(Error::Unsupported(pid));
+            }
+        }
+        SettingChange::ReportRate(hz) => {
+            if let Some(fi) = f.extended_rate {
+                let code = EXTENDED_RATES_HZ.iter().position(|&r| r == hz).ok_or_else(|| Error::Protocol(format!("{hz} Hz is not offered")))?;
+                link.request(index, fi, 3, &[code as u8], t)?;
+            } else if let Some(fi) = f.rate {
+                let ms = (1..=8u32).find(|ms| 1000 / ms == hz).ok_or_else(|| Error::Protocol(format!("{hz} Hz is not offered")))?;
+                link.request(index, fi, 2, &[ms as u8], t)?;
+            } else {
+                return Err(Error::Unsupported(pid));
+            }
+        }
+        SettingChange::OnboardProfile(on) => {
+            let fi = f.profiles.ok_or(Error::Unsupported(pid))?;
+            link.request(index, fi, 1, &[if on { 0x01 } else { 0x02 }], t)?;
+        }
+    }
+    read_settings_with(&link, index, &f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dpi_lists_with_steps_expand() {
+        // 400 and 800 only.
+        assert_eq!(parse_dpi_list(&[0x01, 0x90, 0x03, 0x20, 0x00, 0x00]), [400, 800]);
+        // 100 to 4000 in steps of 50.
+        let range = parse_dpi_list(&[0x00, 0x64, 0xE0, 0x32, 0x0F, 0xA0, 0x00, 0x00]);
+        assert_eq!(range.first(), Some(&100));
+        assert_eq!(range.last(), Some(&4000));
+        assert_eq!(range.len(), 79);
+        // Values after a range keep coming.
+        assert_eq!(parse_dpi_list(&[0x00, 0x64, 0xE0, 0x64, 0x01, 0x2C, 0x01, 0x90, 0x00, 0x00]), [100, 200, 300, 400]);
+        // A step with nothing before it is nonsense: stop.
+        assert!(parse_dpi_list(&[0xE0, 0x32, 0x0F, 0xA0]).is_empty());
+    }
+
+    #[test]
+    fn report_rate_flags() {
+        // 1, 2, 4 and 8 ms.
+        assert_eq!(report_rates(0b1000_1011), [1000, 500, 250, 125]);
+        // 8 ms, 4, 2, 1 and 500 µs.
+        assert_eq!(extended_report_rates(0b001_1111), [2000, 1000, 500, 250, 125]);
+    }
 
     #[test]
     fn frames_and_reply_matching() {

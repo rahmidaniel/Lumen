@@ -1,6 +1,6 @@
 //! Device settings: polling rate, DPI stages, sleep timer and power saving,
-//! for the devices a vendor sidecar knows how to configure (Razer, and the
-//! HyperX Pulsefire Haste 2).
+//! for the devices a vendor sidecar knows how to configure (Razer, the HyperX
+//! Pulsefire Haste 2, and Logitech mice through HID++ 2.0).
 //!
 //! Settings are read from the device each time the UI asks, offered only when
 //! the device answers sensibly, and every change is read back. Razer devices
@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use hidapi::HidApi;
+use lumen_vendor_hid::logitech;
 use lumen_vendor_hyperx::config as hyperx;
 use lumen_vendor_razer::settings::{threshold_percent, threshold_raw, IDLE_MAX, IDLE_MIN};
 use lumen_vendor_razer::{DpiStages, RazerDevice};
@@ -152,6 +153,52 @@ fn apply_razer(dev: &RazerDevice, change: &Change) -> Result<(), String> {
     result.map_err(|e| e.to_string())
 }
 
+// ---- Logitech ---------------------------------------------------------------
+
+const ONBOARD_HINT: &str = "An onboard profile (set up in G HUB) decides DPI and report rate while it is on. Switch to Lumen to change them here.";
+
+fn logitech_settings(s: &logitech::Settings) -> Vec<Setting> {
+    let mut out = Vec::new();
+    if let Some(on) = s.onboard_profile {
+        let options = vec![ChoiceOption { value: 1, label: "The mouse's onboard profile".into() }, ChoiceOption { value: 0, label: "Lumen".into() }];
+        out.push(Setting::Choice { id: "onboard_profile", label: "Settings come from", hint: ONBOARD_HINT, value: u32::from(on), options });
+    }
+    if let Some((hz, rates)) = &s.report_rate {
+        out.push(polling_choice(*hz, rates.iter().copied()));
+    }
+    if let Some((dpi, values)) = &s.dpi {
+        let uniform = values.windows(2).map(|w| w[1] - w[0]).collect::<std::collections::BTreeSet<_>>();
+        if values.len() > 16 && uniform.len() == 1 {
+            let step = *uniform.iter().next().unwrap_or(&50);
+            out.push(Setting::DpiStages { id: "dpi", label: "DPI", hint: "Pointer speed.", stages: vec![*dpi], active: 0, min: values[0], max: *values.last().unwrap_or(dpi), step, max_stages: 1 });
+        } else {
+            let options = values.iter().map(|&v| ChoiceOption { value: v, label: format!("{v} DPI") }).collect();
+            out.push(Setting::Choice { id: "dpi", label: "DPI", hint: "Pointer speed.", value: *dpi, options: with_current(options, *dpi, |v| format!("{v} DPI")) });
+        }
+    }
+    out
+}
+
+fn logitech_change(change: &Change) -> Result<logitech::SettingChange, String> {
+    match change {
+        Change::Choice { id, value } => match id.as_str() {
+            "onboard_profile" => Ok(logitech::SettingChange::OnboardProfile(*value == 1)),
+            "polling_rate" => Ok(logitech::SettingChange::ReportRate(*value)),
+            "dpi" => Ok(logitech::SettingChange::Dpi(*value)),
+            other => Err(format!("unknown setting {other}")),
+        },
+        Change::DpiStages { stages, .. } => stages.first().map(|&d| logitech::SettingChange::Dpi(d)).ok_or_else(|| "no DPI given".to_string()),
+    }
+}
+
+fn logitech_error(e: lumen_vendor_hid::Error) -> String {
+    match e {
+        lumen_vendor_hid::Error::Asleep => "The mouse did not answer. Move it to wake it up, then try again.".into(),
+        lumen_vendor_hid::Error::Unsupported(_) => "This device has no settings Lumen can change.".into(),
+        other => other.to_string(),
+    }
+}
+
 // ---- HyperX ---------------------------------------------------------------
 
 fn hyperx_settings(config: &hyperx::Config, pid: u16) -> Vec<Setting> {
@@ -267,6 +314,11 @@ pub fn read(target: Target) -> Result<(Vec<Setting>, &'static str), String> {
             let config = hyperx::read_config(&api, pid).map_err(asleep)?;
             Ok((hyperx_settings(&config, pid), "lumen"))
         }
+        Target::Logitech(pid) => match logitech::read_settings(&api, pid) {
+            Ok(s) => Ok((logitech_settings(&s), "device")),
+            Err(lumen_vendor_hid::Error::Unsupported(_)) => Ok((Vec::new(), "device")),
+            Err(e) => Err(logitech_error(e)),
+        },
         _ => Ok((Vec::new(), "device")),
     }
 }
@@ -293,6 +345,10 @@ pub fn write(target: Target, change: &Change, wanted: &Wanted) -> Result<(Vec<Se
                 Change::DpiStages { stages, .. } => w.stages = Some(stages.clone()),
             });
             Ok((hyperx_settings(&back, pid), "lumen"))
+        }
+        Target::Logitech(pid) => {
+            let settings = logitech::write_setting(&api, pid, logitech_change(change)?).map_err(logitech_error)?;
+            Ok((logitech_settings(&settings), "device"))
         }
         _ => Err("Lumen cannot change this device's settings.".into()),
     }
@@ -331,6 +387,20 @@ mod tests {
         again.forget(0x0F98);
         assert_eq!(Wanted::load(&dir).get(0x0F98), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn logitech_ranges_get_an_editor_and_short_lists_a_choice() {
+        let range: Vec<u32> = (100..=25_600).step_by(50).collect();
+        let s = logitech::Settings { dpi: Some((1600, range)), report_rate: Some((1000, vec![1000, 500, 250, 125])), onboard_profile: Some(false) };
+        let out = logitech_settings(&s);
+        assert!(matches!(&out[0], Setting::Choice { id: "onboard_profile", value: 0, .. }));
+        assert!(matches!(&out[1], Setting::Choice { id: "polling_rate", value: 1000, .. }));
+        assert!(matches!(&out[2], Setting::DpiStages { id: "dpi", min: 100, max: 25_600, step: 50, max_stages: 1, .. }));
+        let short = logitech::Settings { dpi: Some((800, vec![400, 800, 1600])), ..Default::default() };
+        assert!(matches!(&logitech_settings(&short)[0], Setting::Choice { id: "dpi", value: 800, .. }));
+        assert_eq!(logitech_change(&Change::Choice { id: "onboard_profile".into(), value: 0 }).unwrap(), logitech::SettingChange::OnboardProfile(false));
+        assert_eq!(logitech_change(&Change::DpiStages { stages: vec![2400], active: 0 }).unwrap(), logitech::SettingChange::Dpi(2400));
     }
 
     #[test]

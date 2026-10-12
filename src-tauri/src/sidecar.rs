@@ -124,6 +124,15 @@ pub fn razer_pid(location: &str) -> Option<u16> {
     }
 }
 
+/// Whether Lumen can show settings for this kind of device.
+fn settings_capable(target: Target) -> bool {
+    match target {
+        Target::Razer(_) | Target::Logitech(_) => true,
+        Target::HyperX(pid) => lumen_vendor_hyperx::config::supports(pid),
+        _ => false,
+    }
+}
+
 /// Outcome of one battery poll.
 enum Poll {
     Reading(DeviceExtras),
@@ -169,6 +178,13 @@ pub async fn run(engine: EngineHandle, wanted: Arc<Wanted>) {
                 known = now;
                 answered.retain(|id| known.iter().any(|(k, _)| k == id));
                 unsupported.retain(|id| known.iter().any(|(k, _)| k == id));
+                // Offer settings right away, even for devices that never report a battery.
+                for &(id, target) in &known {
+                    if settings_capable(target) && !answered.contains(&id) {
+                        let onboard = matches!(target, Target::Razer(_)).then_some(Onboard::Razer);
+                        engine.send(Command::SetExtras(id, DeviceExtras { battery: None, onboard, settings: true })).await;
+                    }
+                }
             }
             _ = ticker.tick() => {}
             _ = async {
@@ -269,7 +285,7 @@ async fn poll_device(engine: &EngineHandle, id: u32, target: Target, wanted: Arc
                 Ok(DeviceExtras {
                     battery: Some(Battery { percent: b.percent, charging: b.charging, millivolts: b.millivolts }),
                     onboard: None,
-                    settings: false,
+                    settings: settings_capable(target),
                 })
             }
         }

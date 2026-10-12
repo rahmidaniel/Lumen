@@ -37,8 +37,10 @@ updates itself from Settings → Updates.
   spinning forever.
 - **Device settings**: polling rate, DPI stages, sleep timer and power-saving threshold for
   Razer devices; polling rate and DPI stages for the HyperX Pulsefire Haste 2 (wired and
-  wireless). Read from the device when you select it, and read back after every change. The
-  Haste 2 forgets them when switched off, so Lumen puts them back.
+  wireless); DPI, report rate and the onboard-profile switch for Logitech mice (HID++ 2.0,
+  written from Solaar and untested on hardware). Read from the device when you select it, and
+  read back after every change. The Haste 2 forgets them when switched off, so Lumen puts
+  them back.
 - New app icon, replacing the Tauri placeholder (installer, taskbar, tray, Start menu).
 - README screenshots and demo of the current version.
 
