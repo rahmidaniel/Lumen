@@ -134,7 +134,9 @@ users.
 
 Lumen prefers to own the OpenRGB process it talks to: started with Lumen, restarted if
 it stops answering (after ten seconds, at most every two minutes), stopped when Lumen
-quits. On macOS and Linux the bundled copy is simply a child process. On Windows the
+quits. If an earlier Lumen was killed and left its OpenRGB running, the next Lumen
+recognises the executable and takes the process over. On macOS and Linux the bundled
+copy is simply a child process. On Windows the
 OpenRGB installer's service gets in the way: it runs as SYSTEM outside Lumen's control
 (it needs that elevation for I2C devices such as graphics cards and motherboards), it
 outlives Lumen, and it can wedge. Settings → OpenRGB → *Let Lumen manage OpenRGB* fixes

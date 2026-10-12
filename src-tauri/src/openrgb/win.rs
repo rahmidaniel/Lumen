@@ -60,6 +60,36 @@ pub fn task_end() -> Result<(), String> {
     }
 }
 
+/// PID of the process listening on a local TCP port.
+pub fn listener_pid(port: u16) -> Option<u32> {
+    let (_, out) = run("netstat.exe", &["-ano", "-p", "TCP"]).ok()?;
+    let suffix = format!(":{port}");
+    for line in out.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() >= 5 && cols[0] == "TCP" && cols[3] == "LISTENING" && cols[1].ends_with(&suffix) {
+            return cols[4].parse().ok();
+        }
+    }
+    None
+}
+
+/// Executable path of a process we are allowed to inspect (not SYSTEM services).
+pub fn process_path(pid: u32) -> Option<String> {
+    let (code, out) = run(
+        "powershell.exe",
+        &["-NoProfile", "-NonInteractive", "-Command", &format!("(Get-Process -Id {pid} -ErrorAction SilentlyContinue).Path")],
+    )
+    .ok()?;
+    (code == 0).then(|| out.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+pub fn kill_pid(pid: u32) -> Result<(), String> {
+    match run("taskkill.exe", &["/PID", &pid.to_string(), "/F"])? {
+        (0, _) => Ok(()),
+        (code, out) => Err(format!("taskkill failed ({code}): {}", out.trim())),
+    }
+}
+
 fn current_user() -> String {
     let domain = std::env::var("USERDOMAIN").or_else(|_| std::env::var("COMPUTERNAME")).unwrap_or_default();
     let user = std::env::var("USERNAME").unwrap_or_default();
