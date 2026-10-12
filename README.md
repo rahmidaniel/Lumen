@@ -130,6 +130,21 @@ no longer verify updates, so keep a backup. The feed URL
 by GitHub for public repositories, so the repository has to be public for updates to reach
 users.
 
+## OpenRGB lifecycle
+
+Lumen prefers to own the OpenRGB process it talks to: started with Lumen, restarted if
+it stops answering (after ten seconds, at most every two minutes), stopped when Lumen
+quits. On macOS and Linux the bundled copy is simply a child process. On Windows the
+OpenRGB installer's service gets in the way: it runs as SYSTEM outside Lumen's control
+(it needs that elevation for I2C devices such as graphics cards and motherboards), it
+outlives Lumen, and it can wedge. Settings → OpenRGB → *Let Lumen manage OpenRGB* fixes
+that with a single admin prompt (`src-tauri/packaging/windows/openrgb-adopt.ps1`): the
+service is stopped and disabled, and a Task Scheduler task `LumenOpenRGB` that runs the
+bundled OpenRGB with highest privileges is registered for your account. From then on
+Lumen starts, restarts and stops that task without prompts, and OpenRGB keeps its
+elevated device access. *Hand back to the service* undoes it. Until then, Lumen attaches
+to the service and can only restart it through an admin prompt.
+
 ## Releases
 
 GitHub Actions does the cross-platform builds (`.github/workflows/release.yml`):

@@ -1,5 +1,5 @@
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { Download, Power, RefreshCw } from "lucide-react";
+import { Download, Power, RefreshCw, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge, Button, Field, Panel, Select, Toggle } from "../../components/ui";
 import { isTauri } from "../../lib/ipc";
@@ -10,7 +10,25 @@ export function SettingsPanel() {
   const snapshot = useStore((s) => s.snapshot);
   const error = useStore((s) => s.error);
   const startOpenrgb = useStore((s) => s.startOpenrgb);
-  const restartService = useStore((s) => s.restartOpenrgbService);
+  const restartOpenrgb = useStore((s) => s.restartOpenrgb);
+  const adoptOpenrgb = useStore((s) => s.adoptOpenrgb);
+  const releaseOpenrgb = useStore((s) => s.releaseOpenrgb);
+  const openrgbBusy = useStore((s) => s.openrgbBusy);
+  const ownsOpenrgb = openrgb?.mode === "managed" || openrgb?.mode === "child";
+  const modeText = (() => {
+    switch (openrgb?.mode) {
+      case "managed":
+        return "Lumen runs OpenRGB itself through an elevated task: started with Lumen, restarted if it stops answering, stopped when Lumen quits.";
+      case "child":
+        return "Lumen started this OpenRGB as its own process and stops it again when it quits.";
+      case "service":
+        return "Lumen is attached to the OpenRGB Windows service, which runs on its own and outlives Lumen.";
+      case "external":
+        return "Lumen is attached to an OpenRGB that was started elsewhere.";
+      default:
+        return "Lumen drives every device through OpenRGB's SDK server (port 6742): it attaches to a running OpenRGB, or starts the bundled copy silently in the background.";
+    }
+  })();
   const refresh = useStore((s) => s.refreshDevices);
   const setFps = useStore((s) => s.setFps);
   const fps = String(snapshot?.fps ?? 60);
@@ -72,13 +90,17 @@ export function SettingsPanel() {
           )}
         </div>
         <p className="break-all font-mono text-[11px] text-faint">{openrgb?.exe ?? "OpenRGB executable not found"}</p>
-        <p className="text-xs text-muted">
-          Lumen drives every device through OpenRGB's SDK server (port 6742). It attaches to an OpenRGB that is already running — including the service OpenRGB's own installer sets up — and otherwise starts the copy bundled with Lumen, silently in the background.
-        </p>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => startOpenrgb()}>
-            <Power size={14} /> Start OpenRGB
-          </Button>
+        <p className="text-xs text-muted">{modeText}</p>
+        <div className="flex flex-wrap gap-2">
+          {ownsOpenrgb ? (
+            <Button size="sm" disabled={openrgbBusy} onClick={() => restartOpenrgb()}>
+              <RefreshCw size={14} className={openrgbBusy ? "animate-spin" : undefined} /> Restart OpenRGB
+            </Button>
+          ) : (
+            <Button size="sm" disabled={openrgbBusy} onClick={() => startOpenrgb()}>
+              <Power size={14} /> Start OpenRGB
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => refresh()}>
             <RefreshCw size={14} /> Rescan devices
           </Button>
@@ -86,13 +108,34 @@ export function SettingsPanel() {
         {snapshot?.problem && (
           <div className="flex flex-col gap-2 rounded-md border border-danger/40 bg-danger/10 p-2">
             <span className="text-xs text-danger">{snapshot.problem}</span>
-            {navigator.platform.startsWith("Win") && (
+            {!ownsOpenrgb && openrgb?.service && (
               <div>
-                <Button size="sm" onClick={() => restartService()}>
-                  <RefreshCw size={14} /> Restart OpenRGB service
+                <Button size="sm" disabled={openrgbBusy} onClick={() => restartOpenrgb()}>
+                  <RefreshCw size={14} /> Restart the OpenRGB service (admin prompt)
                 </Button>
               </div>
             )}
+          </div>
+        )}
+        {openrgb?.can_manage && openrgb.mode !== "managed" && (
+          <div className="flex flex-col gap-2 rounded-md border border-border bg-surface-3 p-2">
+            <span className="text-xs font-medium">Let Lumen run OpenRGB</span>
+            <span className="text-xs text-muted">
+              Stops and disables the OpenRGB Windows service and registers a task that runs Lumen's bundled OpenRGB with administrator rights, so graphics cards and motherboards keep working. From then on Lumen starts OpenRGB when it starts, restarts it if it stops answering, and stops it when you quit. One admin prompt, once.
+            </span>
+            <div>
+              <Button size="sm" variant="primary" disabled={openrgbBusy} onClick={() => adoptOpenrgb()}>
+                <ShieldCheck size={14} /> {openrgbBusy ? "Working…" : "Let Lumen manage OpenRGB"}
+              </Button>
+            </div>
+          </div>
+        )}
+        {openrgb?.mode === "managed" && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-faint">Task "LumenOpenRGB" in Task Scheduler; the OpenRGB Windows service stays disabled.</span>
+            <Button size="sm" variant="ghost" disabled={openrgbBusy} onClick={() => releaseOpenrgb()}>
+              Hand back to the service
+            </Button>
           </div>
         )}
         {error && <p className="text-xs text-danger">{error}</p>}

@@ -574,7 +574,15 @@ const snapshot = (): Snapshot => ({
   points: built.points,
   scene: structuredClone(scene),
 });
-const status = (): OpenRgbStatus => ({ exe: "C:\\Program Files\\OpenRGB\\OpenRGB.exe (mock)", server_reachable: true, started_by_lumen: true });
+const status = (): OpenRgbStatus => ({
+  exe: "C:\\Program Files\\OpenRGB\\OpenRGB.exe (mock)",
+  bundled: true,
+  server_reachable: true,
+  started_by_lumen: true,
+  mode: "child",
+  service: { running: false, disabled: true },
+  can_manage: true,
+});
 const publish = () => snapshotListeners.forEach((l) => l(snapshot()));
 
 setInterval(() => {
@@ -639,8 +647,15 @@ export const mock: Backend = {
     delete profiles[name];
     return Object.keys(profiles).sort();
   },
-  async restartOpenrgbService() {
-    throw new Error("Not available in the browser mock.");
+  async restartOpenrgb() {
+    await new Promise((r) => setTimeout(r, 400));
+    return status();
+  },
+  async adoptOpenrgb() {
+    throw new Error("Handing OpenRGB over needs the desktop app.");
+  },
+  async releaseOpenrgb() {
+    throw new Error("Handing OpenRGB back needs the desktop app.");
   },
   async appSettings() {
     return { version: "0.2.0", auto_update: true, update: null };

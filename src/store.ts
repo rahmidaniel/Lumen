@@ -18,6 +18,8 @@ interface State {
   ready: boolean;
   snapshot: Snapshot | null;
   openrgb: OpenRgbStatus | null;
+  /** An OpenRGB start/restart/hand-over is in progress (may be waiting on an admin prompt). */
+  openrgbBusy: boolean;
   app: AppSettings | null;
   update: UpdateUi;
   profiles: string[];
@@ -48,7 +50,9 @@ interface State {
   loadProfile(name: string): Promise<void>;
   deleteProfile(name: string): Promise<void>;
   startOpenrgb(): Promise<void>;
-  restartOpenrgbService(): Promise<void>;
+  restartOpenrgb(): Promise<void>;
+  adoptOpenrgb(): Promise<void>;
+  releaseOpenrgb(): Promise<void>;
   checkForUpdate(): Promise<void>;
   installUpdate(): Promise<void>;
   setAutoUpdate(enabled: boolean): void;
@@ -88,6 +92,7 @@ export const useStore = create<State>()((set, get) => ({
   ready: false,
   snapshot: null,
   openrgb: null,
+  openrgbBusy: false,
   app: null,
   update: NO_UPDATE,
   profiles: [],
@@ -225,12 +230,37 @@ export const useStore = create<State>()((set, get) => ({
       set({ openrgb: await api().openrgbStatus().catch(() => null) });
     }
   },
-  async restartOpenrgbService() {
-    set({ error: null });
+  async restartOpenrgb() {
+    set({ error: null, openrgbBusy: true });
     try {
-      await api().restartOpenrgbService();
+      set({ openrgb: await api().restartOpenrgb() });
     } catch (e) {
       fail(set)(e);
+      set({ openrgb: await api().openrgbStatus().catch(() => null) });
+    } finally {
+      set({ openrgbBusy: false });
+    }
+  },
+  async adoptOpenrgb() {
+    set({ error: null, openrgbBusy: true });
+    try {
+      set({ openrgb: await api().adoptOpenrgb() });
+    } catch (e) {
+      fail(set)(e);
+      set({ openrgb: await api().openrgbStatus().catch(() => null) });
+    } finally {
+      set({ openrgbBusy: false });
+    }
+  },
+  async releaseOpenrgb() {
+    set({ error: null, openrgbBusy: true });
+    try {
+      set({ openrgb: await api().releaseOpenrgb() });
+    } catch (e) {
+      fail(set)(e);
+      set({ openrgb: await api().openrgbStatus().catch(() => null) });
+    } finally {
+      set({ openrgbBusy: false });
     }
   },
   async checkForUpdate() {

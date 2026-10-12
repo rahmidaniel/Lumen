@@ -1,16 +1,23 @@
-//! Finds an OpenRGB to talk to and keeps a headless SDK server running.
+//! Finds an OpenRGB to talk to and keeps a headless SDK server running, with
+//! its lifetime tied to Lumen's wherever that is possible.
 //!
 //! OpenRGB is the only thing that talks to the hardware; Lumen just needs its
 //! TCP server up. Preference order:
-//! 1. a server that is already listening (the user's own OpenRGB, or the
-//!    Windows service OpenRGB 1.0 installs) — attach, never start a second copy;
-//! 2. the copy bundled with Lumen by `scripts/fetch-openrgb.mjs`:
+//! 1. a server that is already listening — attach, never start a second copy;
+//! 2. on Windows, once the user has handed OpenRGB over to Lumen: the
+//!    Task Scheduler task that runs OpenRGB elevated (see [`win`]);
+//! 3. the copy bundled with Lumen by `scripts/fetch-openrgb.mjs`:
 //!    Windows `openrgb/OpenRGB.exe`, Linux `openrgb/OpenRGB.AppImage`,
 //!    macOS `openrgb/OpenRGB.zip` (unpacked once into Lumen's data directory);
-//! 3. a system-wide install found on disk.
+//! 4. a system-wide install found on disk.
 //!
-//! Candidates are tried in that order until a server comes up. A copy Lumen
-//! started is stopped again when Lumen exits.
+//! Whatever Lumen started (task or child process) it stops again on exit and
+//! restarts when the server stops answering; a server it merely attached to
+//! (the OpenRGB Windows service, someone's own OpenRGB) can only be restarted
+//! with an elevated prompt.
+
+#[cfg(windows)]
+mod win;
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -21,13 +28,28 @@ use std::time::{Duration, Instant};
 use openrgb_sdk::DEFAULT_PORT;
 use serde::Serialize;
 
+/// The OpenRGB Windows service, when installed.
+#[derive(Clone, Debug, Serialize)]
+pub struct ServiceInfo {
+    pub running: bool,
+    pub disabled: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Status {
     pub exe: Option<String>,
     /// The executable is the copy shipped inside Lumen's install.
     pub bundled: bool,
     pub server_reachable: bool,
+    /// Lumen started the running server (task or child process) itself.
     pub started_by_lumen: bool,
+    /// `managed` (Lumen's elevated task), `child` (a process Lumen spawned),
+    /// `service` (the OpenRGB Windows service), `external` (someone else's
+    /// server) or `none`.
+    pub mode: &'static str,
+    pub service: Option<ServiceInfo>,
+    /// Lumen could take OpenRGB over on this machine (Windows, with an executable to run).
+    pub can_manage: bool,
 }
 
 /// Where an OpenRGB executable comes from.
@@ -74,6 +96,10 @@ pub struct Manager {
     /// Candidate index and resolved executable of the copy Lumen launched last.
     active: Mutex<Option<(usize, PathBuf)>>,
     child: Mutex<Option<Child>>,
+    /// Windows: Lumen's elevated task exists, so OpenRGB is ours to run.
+    managed: Mutex<bool>,
+    /// Lumen started the task's OpenRGB in this session.
+    task_started: Mutex<bool>,
 }
 
 impl Manager {
@@ -94,19 +120,67 @@ impl Manager {
             Some(c) => tracing::info!(source = %c.source.display(), bundled = c.bundled, others = candidates.len() - 1, "found OpenRGB"),
             None => tracing::warn!("OpenRGB executable not found"),
         }
-        Self { candidates, active: Mutex::new(None), child: Mutex::new(None) }
+        let managed = task_exists();
+        if managed {
+            tracing::info!("OpenRGB is managed by Lumen's elevated task");
+        }
+        Self {
+            candidates,
+            active: Mutex::new(None),
+            child: Mutex::new(None),
+            managed: Mutex::new(managed),
+            task_started: Mutex::new(false),
+        }
     }
 
     pub fn status(&self) -> Status {
         let active = self.active.lock().unwrap().clone();
         let (exe, bundled) = match active {
             Some((i, exe)) => (Some(exe.display().to_string()), self.candidates[i].bundled),
-            None => match self.candidates.first() {
-                Some(c) => (Some(c.source.display()), c.bundled),
+            None => match self.task_exe().or_else(|| self.candidates.first().map(|c| (c.source.display(), c.bundled))) {
+                Some((exe, bundled)) => (Some(exe), bundled),
                 None => (None, false),
             },
         };
-        Status { exe, bundled, server_reachable: server_reachable(), started_by_lumen: self.child_alive() }
+        let server_reachable = server_reachable();
+        let service = service_info();
+        let managed = self.managed();
+        let child = self.child_alive();
+        let mode = if managed {
+            "managed"
+        } else if child {
+            "child"
+        } else if service.as_ref().is_some_and(|s| s.running) {
+            "service"
+        } else if server_reachable {
+            "external"
+        } else {
+            "none"
+        };
+        Status {
+            exe,
+            bundled,
+            server_reachable,
+            started_by_lumen: child || (managed && *self.task_started.lock().unwrap()),
+            mode,
+            service,
+            can_manage: cfg!(windows) && self.task_exe().is_some(),
+        }
+    }
+
+    fn managed(&self) -> bool {
+        *self.managed.lock().unwrap()
+    }
+
+    /// The executable Lumen's task runs (or would run): the bundled copy, else any plain executable.
+    fn task_exe(&self) -> Option<(String, bool)> {
+        let exe = |bundled: bool| {
+            self.candidates
+                .iter()
+                .find(|c| c.bundled == bundled && matches!(c.source, Source::Exe(_)))
+                .map(|c| (c.source.display(), c.bundled))
+        };
+        exe(true).or_else(|| exe(false))
     }
 
     fn child_alive(&self) -> bool {
@@ -114,24 +188,48 @@ impl Manager {
         matches!(child.as_mut().map(|c| c.try_wait()), Some(Ok(None)))
     }
 
+    /// Whether Lumen can restart the server without an elevated prompt.
+    pub fn can_restart_quietly(&self) -> bool {
+        self.managed() || self.child_alive()
+    }
+
     /// Start a headless OpenRGB server unless one is already listening, then
-    /// wait (up to ~20 s per candidate — detection takes a few seconds) for the
-    /// port to open. Falls through to the next candidate when one fails.
+    /// wait (up to ~20 s per attempt — detection takes a few seconds) for the
+    /// port to open. Falls through to the next option when one fails.
     pub async fn ensure_running(&self) -> Result<Status, String> {
         if server_reachable() {
             return Ok(self.status());
         }
-        if self.candidates.is_empty() {
-            return Err("OpenRGB is not installed (or not found)".into());
-        }
         if self.child_alive() {
-            return match self.wait_for_server(Duration::from_secs(20)).await {
+            return match self.wait_for_server(Duration::from_secs(20), true).await {
                 true => Ok(self.status()),
                 false => Err("OpenRGB is running but its SDK server did not come up".into()),
             };
         }
 
         let mut last_err = String::new();
+        if self.managed() {
+            match task_run() {
+                Ok(()) => {
+                    *self.task_started.lock().unwrap() = true;
+                    tracing::info!("started OpenRGB through Lumen's task");
+                    if self.wait_for_server(Duration::from_secs(20), false).await {
+                        return Ok(self.status());
+                    }
+                    last_err = "OpenRGB started through Lumen's task but its SDK server did not come up".into();
+                    tracing::warn!("{last_err}");
+                    let _ = task_end();
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "Lumen's OpenRGB task could not be started; falling back to a child process");
+                    last_err = e;
+                }
+            }
+        }
+        if self.candidates.is_empty() {
+            return Err(if last_err.is_empty() { "OpenRGB is not installed (or not found)".into() } else { last_err });
+        }
+
         for (i, candidate) in self.candidates.iter().enumerate() {
             let source = candidate.source.clone();
             let exe = match tokio::task::spawn_blocking(move || source.resolve()).await.map_err(|e| e.to_string())? {
@@ -154,7 +252,7 @@ impl Manager {
                     continue;
                 }
             }
-            if self.wait_for_server(Duration::from_secs(20)).await {
+            if self.wait_for_server(Duration::from_secs(20), true).await {
                 return Ok(self.status());
             }
             last_err = "OpenRGB started but its SDK server did not come up".into();
@@ -164,13 +262,14 @@ impl Manager {
         Err(last_err)
     }
 
-    async fn wait_for_server(&self, timeout: Duration) -> bool {
+    /// Poll for the SDK port; with `watch_child`, give up as soon as the child process dies.
+    async fn wait_for_server(&self, timeout: Duration, watch_child: bool) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if server_reachable() {
                 return true;
             }
-            if !self.child_alive() {
+            if watch_child && !self.child_alive() {
                 return false;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -178,8 +277,73 @@ impl Manager {
         false
     }
 
-    /// Stop the OpenRGB copy Lumen started (no-op if we attached to someone else's).
+    /// Restart the server: quietly when Lumen runs it (task or child), through
+    /// an elevated prompt when it is the Windows service, not at all otherwise.
+    pub async fn restart(&self) -> Result<Status, String> {
+        if self.managed() {
+            tracing::info!("restarting OpenRGB (Lumen's task)");
+            let _ = task_end();
+        } else if self.child_alive() {
+            tracing::info!("restarting OpenRGB (child process)");
+            self.stop();
+        } else if service_info().is_some() {
+            tracing::info!("restarting the OpenRGB Windows service");
+            tokio::task::spawn_blocking(restart_service).await.map_err(|e| e.to_string())??;
+            if self.wait_for_server(Duration::from_secs(20), false).await {
+                return Ok(self.status());
+            }
+            return Err("The OpenRGB service was restarted but its SDK server did not come up.".into());
+        } else {
+            return Err("OpenRGB was not started by Lumen; restart it yourself.".into());
+        }
+
+        // Let the port close before starting the next instance.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server_reachable() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        if server_reachable() {
+            return Err("Another OpenRGB is still holding port 6742.".into());
+        }
+        self.ensure_running().await
+    }
+
+    /// Windows: hand OpenRGB over to Lumen (one elevated prompt), then start it.
+    pub async fn adopt(&self) -> Result<Status, String> {
+        let (exe, _) = self.task_exe().ok_or_else(|| "No OpenRGB executable to run.".to_string())?;
+        if !cfg!(windows) {
+            return Err("Only needed on Windows: elsewhere OpenRGB already runs as a process Lumen owns.".into());
+        }
+        // Two instances would fight over the devices.
+        self.stop();
+        let exe_path = PathBuf::from(exe);
+        tokio::task::spawn_blocking(move || adopt(&exe_path)).await.map_err(|e| e.to_string())??;
+        *self.managed.lock().unwrap() = task_exists();
+        self.ensure_running().await
+    }
+
+    /// Windows: give OpenRGB back to its service (one elevated prompt).
+    pub async fn release(&self) -> Result<Status, String> {
+        if !self.managed() {
+            return Err("OpenRGB is not managed by Lumen.".into());
+        }
+        let _ = task_end();
+        tokio::task::spawn_blocking(release).await.map_err(|e| e.to_string())??;
+        *self.managed.lock().unwrap() = task_exists();
+        *self.task_started.lock().unwrap() = false;
+        self.ensure_running().await
+    }
+
+    /// Stop whatever Lumen started: the task's OpenRGB or the child process.
+    /// A server Lumen merely attached to is left alone.
     pub fn stop(&self) {
+        if self.managed() && *self.task_started.lock().unwrap() {
+            tracing::info!("stopping OpenRGB (Lumen's task)");
+            if let Err(e) = task_end() {
+                tracing::warn!(%e, "could not end Lumen's OpenRGB task");
+            }
+            *self.task_started.lock().unwrap() = false;
+        }
         if let Some(mut child) = self.child.lock().unwrap().take() {
             tracing::info!("stopping the OpenRGB server Lumen started");
             let _ = child.kill();
@@ -188,32 +352,42 @@ impl Manager {
     }
 }
 
-/// Restart the OpenRGB Windows service. It runs as LocalSystem, so this asks
-/// for elevation through UAC and waits for the elevated helper to finish.
+// Platform shims so the manager reads the same on every OS.
+
 #[cfg(windows)]
-pub fn restart_service() -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let inner = "Restart-Service -Name OpenRGB -ErrorAction Stop";
-    let outer = format!(
-        "$p = Start-Process -Verb RunAs -Wait -PassThru -WindowStyle Hidden -FilePath powershell -ArgumentList '-NoProfile -NonInteractive -WindowStyle Hidden -Command \"{inner}\"'; exit $p.ExitCode"
-    );
-    let status = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &outer])
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()
-        .map_err(|e| format!("cannot run PowerShell: {e}"))?;
-    if status.success() {
-        tracing::info!("OpenRGB service restarted");
-        Ok(())
-    } else {
-        Err("The restart did not complete: the prompt was cancelled, or OpenRGB is not installed as a service.".into())
-    }
+use win::{adopt, release, restart_service, task_end, task_exists, task_run};
+#[cfg(windows)]
+fn service_info() -> Option<ServiceInfo> {
+    win::service()
 }
 
 #[cfg(not(windows))]
-pub fn restart_service() -> Result<(), String> {
-    Err("Restarting OpenRGB automatically is only available on Windows; restart it yourself.".into())
+fn task_exists() -> bool {
+    false
+}
+#[cfg(not(windows))]
+fn task_run() -> Result<(), String> {
+    Err("not on this platform".into())
+}
+#[cfg(not(windows))]
+fn task_end() -> Result<(), String> {
+    Ok(())
+}
+#[cfg(not(windows))]
+fn adopt(_exe: &Path) -> Result<(), String> {
+    Err("not on this platform".into())
+}
+#[cfg(not(windows))]
+fn release() -> Result<(), String> {
+    Err("not on this platform".into())
+}
+#[cfg(not(windows))]
+fn restart_service() -> Result<(), String> {
+    Err("not on this platform".into())
+}
+#[cfg(not(windows))]
+fn service_info() -> Option<ServiceInfo> {
+    None
 }
 
 pub fn server_reachable() -> bool {

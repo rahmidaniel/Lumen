@@ -166,8 +166,15 @@ export interface FramePayload {
 
 export interface OpenRgbStatus {
   exe: string | null;
+  bundled: boolean;
   server_reachable: boolean;
   started_by_lumen: boolean;
+  /** How the running server relates to Lumen. */
+  mode: "managed" | "child" | "service" | "external" | "none";
+  /** The OpenRGB Windows service, when installed. */
+  service: { running: boolean; disabled: boolean } | null;
+  /** Lumen could take OpenRGB over on this machine. */
+  can_manage: boolean;
 }
 
 export interface UpdateInfo {

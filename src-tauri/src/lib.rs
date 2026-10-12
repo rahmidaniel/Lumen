@@ -179,11 +179,24 @@ async fn start_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status>
     state.openrgb.ensure_running().await
 }
 
-/// Restart the OpenRGB service (Windows; prompts for elevation). The engine
-/// reconnects on its own once the server is back.
+/// Restart OpenRGB: quietly when Lumen runs it, through an elevated prompt
+/// when it is the Windows service. The engine reconnects on its own.
 #[tauri::command]
-async fn restart_openrgb_service() -> CmdResult {
-    tokio::task::spawn_blocking(openrgb::restart_service).await.map_err(|e| e.to_string())?
+async fn restart_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status> {
+    state.openrgb.restart().await
+}
+
+/// Windows: hand OpenRGB over to Lumen (stop and disable the service,
+/// register Lumen's elevated task), then start it. One admin prompt.
+#[tauri::command]
+async fn adopt_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status> {
+    state.openrgb.adopt().await
+}
+
+/// Windows: give OpenRGB back to its service. One admin prompt.
+#[tauri::command]
+async fn release_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status> {
+    state.openrgb.release().await
 }
 
 /// App-level preferences and version info for the Settings panel.
@@ -343,6 +356,49 @@ async fn forward_frames(handle: AppHandle, engine: EngineHandle) {
     }
 }
 
+/// Restart OpenRGB when it stops answering, provided Lumen runs it itself
+/// (its task or a child process): after ten seconds of "running but not
+/// responding", at most once every two minutes.
+async fn supervise_openrgb(handle: AppHandle, engine: EngineHandle) {
+    let mut rx = engine.watch_snapshot();
+    let mut unresponsive_since: Option<std::time::Instant> = None;
+    let mut last_restart: Option<std::time::Instant> = None;
+    loop {
+        tokio::select! {
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+        }
+        let (connected, unresponsive) = {
+            let snap = rx.borrow();
+            (snap.connected, snap.problem.is_some())
+        };
+        if connected || !unresponsive {
+            unresponsive_since = None;
+            continue;
+        }
+        let since = *unresponsive_since.get_or_insert_with(std::time::Instant::now);
+        if since.elapsed() < Duration::from_secs(10) || last_restart.is_some_and(|t| t.elapsed() < Duration::from_secs(120)) {
+            continue;
+        }
+        let state: State<AppState> = handle.state();
+        if !state.openrgb.can_restart_quietly() {
+            continue;
+        }
+        last_restart = Some(std::time::Instant::now());
+        unresponsive_since = None;
+        tracing::warn!("OpenRGB stopped answering; restarting it");
+        match state.openrgb.restart().await {
+            Ok(_) => tracing::info!("OpenRGB restarted"),
+            Err(e) => tracing::warn!(%e, "OpenRGB restart failed"),
+        }
+        let _ = handle.emit("openrgb_status", state.openrgb.status());
+    }
+}
+
 /// Show the main window, recreating it from the config if it was closed.
 fn show_main_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -447,6 +503,7 @@ pub fn run() {
                 };
                 tauri::async_runtime::spawn(updates::auto_check(handle.clone(), enabled));
             }
+            tauri::async_runtime::spawn(supervise_openrgb(handle.clone(), engine.clone()));
 
             setup_tray(&handle)?;
             Ok(())
@@ -467,7 +524,9 @@ pub fn run() {
             delete_profile,
             openrgb_status,
             start_openrgb,
-            restart_openrgb_service,
+            restart_openrgb,
+            adopt_openrgb,
+            release_openrgb,
             app_settings,
             set_auto_update,
             check_for_update,

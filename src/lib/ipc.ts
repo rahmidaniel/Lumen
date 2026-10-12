@@ -22,8 +22,12 @@ export interface Backend {
   deleteProfile(name: string): Promise<string[]>;
   openrgbStatus(): Promise<OpenRgbStatus>;
   startOpenrgb(): Promise<OpenRgbStatus>;
-  /** Restart the OpenRGB Windows service (asks for elevation). */
-  restartOpenrgbService(): Promise<void>;
+  /** Restart OpenRGB: quietly when Lumen runs it, via an admin prompt for the Windows service. */
+  restartOpenrgb(): Promise<OpenRgbStatus>;
+  /** Windows: stop the OpenRGB service and run OpenRGB under Lumen's control (one admin prompt). */
+  adoptOpenrgb(): Promise<OpenRgbStatus>;
+  /** Windows: give OpenRGB back to its service (one admin prompt). */
+  releaseOpenrgb(): Promise<OpenRgbStatus>;
   appSettings(): Promise<AppSettings>;
   setAutoUpdate(enabled: boolean): Promise<void>;
   /** Ask the release feed; `null` means this is the latest version. */
@@ -62,7 +66,9 @@ const tauriBackend: Backend = {
   deleteProfile: (name) => invoke<string[]>("delete_profile", { name }),
   openrgbStatus: () => invoke<OpenRgbStatus>("openrgb_status"),
   startOpenrgb: () => invoke<OpenRgbStatus>("start_openrgb"),
-  restartOpenrgbService: () => invoke("restart_openrgb_service"),
+  restartOpenrgb: () => invoke<OpenRgbStatus>("restart_openrgb"),
+  adoptOpenrgb: () => invoke<OpenRgbStatus>("adopt_openrgb"),
+  releaseOpenrgb: () => invoke<OpenRgbStatus>("release_openrgb"),
   appSettings: () => invoke<AppSettings>("app_settings"),
   setAutoUpdate: (enabled) => invoke("set_auto_update", { enabled }),
   checkForUpdate: () => invoke<UpdateInfo | null>("check_for_update"),
