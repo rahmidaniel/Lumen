@@ -1,10 +1,58 @@
 # Lumen
 
-Cross-platform RGB lighting studio built on OpenRGB. One canvas, every device, in sync.
+**One app for all your RGB gear, whatever the brand.**
 
-- **OpenRGB** does device I/O (headless, SDK protocol v6).
-- **Lumen** does the rest: a Chroma-Studio-style virtual canvas, layered effects, per-key painting, profiles,
-  battery status, save-to-device where hardware allows, and a UI that stays smooth.
+Razer has Synapse, Logitech has G HUB, Corsair has iCUE, SteelSeries has GG, ASUS has
+Armoury Crate, HyperX has NGENUITY, Glorious has CORE. Each one is a separate download,
+a separate background service, and a separate idea of what "sync" means. Lumen replaces
+the lot with a single small, cross-platform app: one canvas where every device lights up
+together, and one place to see battery levels and manage devices.
+
+## What it does
+
+- **Unified lighting.** Every device sits on one virtual desk, drawn to scale: keyboards on
+  their real ANSI or ISO layout, mats as edge-lit loops, mice, graphics cards. A layer stack
+  of effects (static, gradient, spectrum, wave, breathing, starlight) runs across all of them
+  as one motion, in the spirit of Razer Chroma Studio, but for every brand at once.
+- **Per-key painting.** A paint layer colours individual keys and LEDs on top of any effect.
+- **Battery at a glance.** Wireless mice and keyboards show their charge on the Devices home,
+  in the top bar and in the tray tooltip.
+- **Boot lighting.** Where the hardware has onboard memory (Razer so far), Lumen writes the
+  effect the device shows before any software has started.
+- **Profiles** for saving and switching whole scenes.
+- **Light footprint.** Lives in the tray; closing the window frees the UI entirely while
+  lighting keeps running. Starts with your OS if you want it to.
+- **Self-contained and self-updating.** Installers bundle everything needed, and Lumen
+  updates itself from GitHub Releases.
+
+## Supported devices
+
+Lighting goes through [OpenRGB](https://openrgb.org), which Lumen bundles and manages for
+you, so any device OpenRGB supports works: thousands of keyboards, mice, mats, headsets,
+graphics cards, motherboards, RAM, fans and LED strips across Razer, Logitech, Corsair,
+SteelSeries, ASUS, MSI, Gigabyte, HyperX, NZXT, Cooler Master and many more. See OpenRGB's
+[supported devices list](https://openrgb.org/devices.html).
+
+Things OpenRGB does not do, Lumen does itself, per vendor:
+
+| Brand | Battery | Onboard boot lighting | Status |
+|---|---|---|---|
+| Razer | ✅ | ✅ | tested on hardware |
+| HyperX | ✅ | – | tested on hardware |
+| Logitech (HID++, Lightspeed/Unifying) | ✅ | – | from published protocol, untested |
+| Corsair (Bragi and legacy wireless) | ✅ | – | from published protocol, untested |
+| SteelSeries (Aerox, Prime, Rival) | ✅ | – | from published protocol, untested |
+| ASUS ROG wireless mice | ✅ | – | from published protocol, untested |
+| Glorious (CORE wireless) | ✅ | – | from published protocol, untested |
+
+If you own one of the untested devices, a report of what Lumen shows is very welcome.
+
+## How it works
+
+- **OpenRGB** does device I/O (headless SDK server, protocol v6). Lumen ships it, starts it,
+  restarts it if it hangs, and stops it on exit.
+- **Lumen** does everything else: the canvas, the effect engine (60 fps in Rust), profiles,
+  vendor battery and onboard-memory sidecars, and the UI.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for architecture and milestones, and
 [`docs/protocols.md`](docs/protocols.md) for the wire protocols Lumen speaks.
