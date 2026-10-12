@@ -177,8 +177,18 @@ GitHub Actions does the cross-platform builds (`.github/workflows/release.yml`):
    `Cargo.toml`, commit.
 2. Tag and push: `git tag v0.1.0 && git push origin main v0.1.0`.
 3. The workflow builds Windows (NSIS), macOS (Apple Silicon and Intel DMGs) and Linux
-   (deb, rpm, AppImage) in parallel and attaches them to a **draft** release named after
-   the tag. Review it on GitHub and publish.
+   (deb, rpm, AppImage) in parallel, signs them for the updater, and attaches them plus
+   the `latest.json` update manifest to a **draft** release named after the tag. Review
+   it on GitHub and publish; the updater only sees published, non-pre-release releases.
+4. If two jobs finish at the same moment, one can fail while updating the shared
+   `latest.json` ("Not Found - update-a-release-asset") and the manifest may miss
+   platforms. Re-run the failed jobs (`gh run rerun <run id> --failed`), then rebuild the
+   manifest from the signed assets with `node scripts/release-manifest.mjs vX.Y.Z` before
+   publishing.
+
+The OpenRGB build assets come from the `openrgb-1.0` pre-release of this repository (a
+byte-for-byte mirror of the official files, SHA-256-pinned in `scripts/fetch-openrgb.mjs`),
+with Codeberg as the fallback; Codeberg has refused automated downloads before.
 
 `ci.yml` runs `npm run build` and `cargo test --workspace` on all three OSes for every
 push and pull request.
