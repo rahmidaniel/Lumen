@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in Lumen doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. If a device is missing entirely, check [OpenRGB's device list](https://openrgb.org/devices.html) first and quit vendor apps (Synapse, G HUB, iCUE, …) that may hold the device.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what Lumen did instead. Screenshots help.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Lumen version
+      description: Settings → Updates shows it.
+      placeholder: "0.2.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (deb)
+        - Linux (rpm)
+        - Linux (AppImage)
+    validations:
+      required: true
+  - type: input
+    id: osversion
+    attributes:
+      label: OS version or distribution
+      placeholder: "Windows 11 24H2, macOS 15.3, Ubuntu 24.04, …"
+  - type: textarea
+    id: devices
+    attributes:
+      label: Devices involved
+      description: Brand and model, and how they connect (USB, wireless dongle, Bluetooth).
+      placeholder: |
+        Razer DeathStalker V2 Pro TKL (wireless dongle)
+        HyperX Pulsefire Haste 2 Wireless (dongle)
+  - type: dropdown
+    id: openrgb
+    attributes:
+      label: Settings → OpenRGB shows
+      options:
+        - Lumen started OpenRGB as its own process
+        - Lumen runs OpenRGB through an elevated task (Windows)
+        - Attached to the OpenRGB Windows service
+        - Attached to an OpenRGB started elsewhere
+        - Not connected or not responding
+        - Not sure
+  - type: textarea
+    id: vendor
+    attributes:
+      label: Other RGB software running
+      description: Synapse, G HUB, iCUE, SteelSeries GG, Armoury Crate, SignalRGB, OpenRGB's own window, …
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Steps to reproduce, when it started, whether restarting OpenRGB (Settings → OpenRGB) helps.

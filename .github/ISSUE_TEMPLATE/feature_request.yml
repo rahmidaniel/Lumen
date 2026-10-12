@@ -1,0 +1,20 @@
+name: Feature request
+description: Something a vendor app does that Lumen should, or a new idea.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do?
+      description: The situation and what you'd like Lumen to do in it. If a vendor app already does it, say which one and how.
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: Devices it applies to
+      description: Brand and model, if it is device-specific.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else

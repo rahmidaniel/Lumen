@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A device doesn't show up at all
+    url: https://openrgb.org/devices.html
+    about: Lumen lights what OpenRGB can reach. Check OpenRGB's device list first; unsupported devices are a request for the OpenRGB project.
+  - name: Security problem
+    url: https://github.com/rahmidaniel/lumen/security/advisories/new
+    about: Report vulnerabilities privately, not as a public issue.

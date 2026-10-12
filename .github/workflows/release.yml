@@ -73,11 +73,20 @@ jobs:
           tagName: v__VERSION__
           releaseName: 'Lumen v__VERSION__'
           releaseBody: |
-            Installers for every platform, each with OpenRGB 1.0 bundled.
+            <!-- Paste this version's section of CHANGELOG.md here before publishing. -->
 
-            - **Windows**: `Lumen_<version>_x64-setup.exe` — SmartScreen will warn (unsigned); choose *More info → Run anyway*.
-            - **macOS**: `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`) — unsigned, so run `xattr -cr /Applications/Lumen.app` once after copying it in.
-            - **Linux**: `.deb` / `.rpm` (installs OpenRGB's udev rules) or the `.AppImage` (needs OpenRGB's udev rules installed separately).
+            **Already on Lumen 0.2.1 or later?** Settings → Updates installs this version for you.
+
+            | System | Download | First run |
+            |---|---|---|
+            | Windows 10/11 x64 | `Lumen_<version>_x64-setup.exe` | Unsigned, so SmartScreen warns: *More info → Run anyway* |
+            | macOS, Apple Silicon | `Lumen_<version>_aarch64.dmg` | Unsigned: run `xattr -cr /Applications/Lumen.app` once after copying it in |
+            | macOS, Intel | `Lumen_<version>_x64.dmg` | As above |
+            | Debian, Ubuntu | `Lumen_<version>_amd64.deb` | Installs OpenRGB's udev rules |
+            | Fedora, openSUSE | `Lumen-<version>-1.x86_64.rpm` | Installs OpenRGB's udev rules |
+            | Other Linux | `Lumen_<version>_amd64.AppImage` | Needs OpenRGB's udev rules installed separately |
+
+            Every installer bundles OpenRGB 1.0. The `.sig` files, the `.app.tar.gz` archives and `latest.json` are for the in-app updater.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

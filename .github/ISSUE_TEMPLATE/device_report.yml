@@ -1,0 +1,62 @@
+name: Device report
+description: Tell us how Lumen behaves with your hardware, good or bad.
+labels: [device report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports from real hardware are how Lumen's untested parts become tested. Battery readings for Logitech, Corsair, SteelSeries, ASUS ROG and Glorious, and anything on macOS or Linux, are especially welcome. "It all works" is a useful report too.
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Brand and exact model.
+      placeholder: "Logitech G Pro X Superlight 2"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - USB cable
+        - Wireless dongle / receiver
+        - Bluetooth
+        - Internal (GPU, motherboard, RAM, fans)
+    validations:
+      required: true
+  - type: dropdown
+    id: lighting
+    attributes:
+      label: Lighting
+      options:
+        - Works
+        - Works, but the layout or LED positions look wrong
+        - Device shows up but doesn't light
+        - Device doesn't show up
+        - Not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: battery
+    attributes:
+      label: Battery
+      options:
+        - Shows the right level
+        - Shows a wrong level
+        - No battery shown
+        - Not a wireless device
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Lumen version and OS
+      placeholder: "0.2.2 on Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Details
+      description: What the vendor app shows for comparison (e.g. battery %), charging behaviour, screenshots of the canvas, anything odd.

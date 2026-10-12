@@ -55,7 +55,7 @@
       "resources/openrgb/": "openrgb/",
       "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
     },
-    "licenseFile": "../LICENSE",
+    "licenseFile": "packaging/installer-license.txt",
     "windows": {
       "nsis": {
         "installMode": "currentUser"
