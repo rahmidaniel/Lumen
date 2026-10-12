@@ -438,6 +438,7 @@ type Drag =
 export function CanvasStage() {
   const snapshot = useStore((s) => s.snapshot);
   const openrgb = useStore((s) => s.openrgb);
+  const problem = useStore((s) => s.snapshot?.problem ?? null);
   const selected = useStore((s) => s.selectedDevice);
   const selectDevice = useStore((s) => s.selectDevice);
   const setPlacement = useStore((s) => s.setPlacement);
@@ -651,7 +652,7 @@ export function CanvasStage() {
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
           <div className="h-10 w-10 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
           <p className="text-sm text-muted">
-            {openrgb && !openrgb.exe ? "OpenRGB isn't installed. Install it, then press Start OpenRGB in Settings." : "Waiting for OpenRGB to report your devices…"}
+            {problem ?? (openrgb && !openrgb.exe ? "OpenRGB isn't installed. Install it, then press Start OpenRGB in Settings." : "Waiting for OpenRGB to report your devices…")}
           </p>
         </div>
       )}

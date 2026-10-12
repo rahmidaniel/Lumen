@@ -566,6 +566,7 @@ const started = performance.now();
 const publicDevices: DeviceInfo[] = devices.map(({ matrix: _m, names: _n, ...info }) => info);
 const snapshot = (): Snapshot => ({
   connected: true,
+  problem: null,
   paused,
   fps,
   devices: publicDevices,
@@ -637,6 +638,9 @@ export const mock: Backend = {
   async deleteProfile(name) {
     delete profiles[name];
     return Object.keys(profiles).sort();
+  },
+  async restartOpenrgbService() {
+    throw new Error("Not available in the browser mock.");
   },
   async appSettings() {
     return { version: "0.2.0", auto_update: true, update: null };

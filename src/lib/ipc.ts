@@ -22,6 +22,8 @@ export interface Backend {
   deleteProfile(name: string): Promise<string[]>;
   openrgbStatus(): Promise<OpenRgbStatus>;
   startOpenrgb(): Promise<OpenRgbStatus>;
+  /** Restart the OpenRGB Windows service (asks for elevation). */
+  restartOpenrgbService(): Promise<void>;
   appSettings(): Promise<AppSettings>;
   setAutoUpdate(enabled: boolean): Promise<void>;
   /** Ask the release feed; `null` means this is the latest version. */
@@ -60,6 +62,7 @@ const tauriBackend: Backend = {
   deleteProfile: (name) => invoke<string[]>("delete_profile", { name }),
   openrgbStatus: () => invoke<OpenRgbStatus>("openrgb_status"),
   startOpenrgb: () => invoke<OpenRgbStatus>("start_openrgb"),
+  restartOpenrgbService: () => invoke("restart_openrgb_service"),
   appSettings: () => invoke<AppSettings>("app_settings"),
   setAutoUpdate: (enabled) => invoke("set_auto_update", { enabled }),
   checkForUpdate: () => invoke<UpdateInfo | null>("check_for_update"),

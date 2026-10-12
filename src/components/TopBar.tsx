@@ -44,6 +44,7 @@ export function TopBar() {
 
   let status: { tone: "ok" | "warn" | "danger"; text: string };
   if (connected) status = { tone: "ok", text: `OpenRGB · ${snapshot?.devices.length ?? 0} devices` };
+  else if (snapshot?.problem) status = { tone: "danger", text: "OpenRGB not responding" };
   else if (openrgb && !openrgb.exe) status = { tone: "danger", text: "OpenRGB not installed" };
   else status = { tone: "warn", text: "Connecting to OpenRGB…" };
 

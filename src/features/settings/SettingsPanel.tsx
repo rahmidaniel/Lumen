@@ -10,6 +10,7 @@ export function SettingsPanel() {
   const snapshot = useStore((s) => s.snapshot);
   const error = useStore((s) => s.error);
   const startOpenrgb = useStore((s) => s.startOpenrgb);
+  const restartService = useStore((s) => s.restartOpenrgbService);
   const refresh = useStore((s) => s.refreshDevices);
   const setFps = useStore((s) => s.setFps);
   const fps = String(snapshot?.fps ?? 60);
@@ -60,7 +61,15 @@ export function SettingsPanel() {
       <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface-2 p-3">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium">OpenRGB</span>
-          {snapshot?.connected ? <Badge tone="ok">connected</Badge> : openrgb?.server_reachable ? <Badge tone="warn">server up, connecting…</Badge> : <Badge tone="danger">not running</Badge>}
+          {snapshot?.connected ? (
+            <Badge tone="ok">connected</Badge>
+          ) : snapshot?.problem ? (
+            <Badge tone="danger">not responding</Badge>
+          ) : openrgb?.server_reachable ? (
+            <Badge tone="warn">server up, connecting…</Badge>
+          ) : (
+            <Badge tone="danger">not running</Badge>
+          )}
         </div>
         <p className="break-all font-mono text-[11px] text-faint">{openrgb?.exe ?? "OpenRGB executable not found"}</p>
         <p className="text-xs text-muted">
@@ -74,6 +83,18 @@ export function SettingsPanel() {
             <RefreshCw size={14} /> Rescan devices
           </Button>
         </div>
+        {snapshot?.problem && (
+          <div className="flex flex-col gap-2 rounded-md border border-danger/40 bg-danger/10 p-2">
+            <span className="text-xs text-danger">{snapshot.problem}</span>
+            {navigator.platform.startsWith("Win") && (
+              <div>
+                <Button size="sm" onClick={() => restartService()}>
+                  <RefreshCw size={14} /> Restart OpenRGB service
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
         {error && <p className="text-xs text-danger">{error}</p>}
       </div>
 

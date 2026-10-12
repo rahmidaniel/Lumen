@@ -179,6 +179,13 @@ async fn start_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status>
     state.openrgb.ensure_running().await
 }
 
+/// Restart the OpenRGB service (Windows; prompts for elevation). The engine
+/// reconnects on its own once the server is back.
+#[tauri::command]
+async fn restart_openrgb_service() -> CmdResult {
+    tokio::task::spawn_blocking(openrgb::restart_service).await.map_err(|e| e.to_string())?
+}
+
 /// App-level preferences and version info for the Settings panel.
 #[derive(Clone, Serialize)]
 struct AppSettings {
@@ -460,6 +467,7 @@ pub fn run() {
             delete_profile,
             openrgb_status,
             start_openrgb,
+            restart_openrgb_service,
             app_settings,
             set_auto_update,
             check_for_update,

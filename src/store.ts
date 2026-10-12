@@ -48,6 +48,7 @@ interface State {
   loadProfile(name: string): Promise<void>;
   deleteProfile(name: string): Promise<void>;
   startOpenrgb(): Promise<void>;
+  restartOpenrgbService(): Promise<void>;
   checkForUpdate(): Promise<void>;
   installUpdate(): Promise<void>;
   setAutoUpdate(enabled: boolean): void;
@@ -222,6 +223,14 @@ export const useStore = create<State>()((set, get) => ({
     } catch (e) {
       fail(set)(e);
       set({ openrgb: await api().openrgbStatus().catch(() => null) });
+    }
+  },
+  async restartOpenrgbService() {
+    set({ error: null });
+    try {
+      await api().restartOpenrgbService();
+    } catch (e) {
+      fail(set)(e);
     }
   },
   async checkForUpdate() {

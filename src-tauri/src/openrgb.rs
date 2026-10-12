@@ -188,6 +188,34 @@ impl Manager {
     }
 }
 
+/// Restart the OpenRGB Windows service. It runs as LocalSystem, so this asks
+/// for elevation through UAC and waits for the elevated helper to finish.
+#[cfg(windows)]
+pub fn restart_service() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let inner = "Restart-Service -Name OpenRGB -ErrorAction Stop";
+    let outer = format!(
+        "$p = Start-Process -Verb RunAs -Wait -PassThru -WindowStyle Hidden -FilePath powershell -ArgumentList '-NoProfile -NonInteractive -WindowStyle Hidden -Command \"{inner}\"'; exit $p.ExitCode"
+    );
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &outer])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map_err(|e| format!("cannot run PowerShell: {e}"))?;
+    if status.success() {
+        tracing::info!("OpenRGB service restarted");
+        Ok(())
+    } else {
+        Err("The restart did not complete: the prompt was cancelled, or OpenRGB is not installed as a service.".into())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn restart_service() -> Result<(), String> {
+    Err("Restarting OpenRGB automatically is only available on Windows; restart it yourself.".into())
+}
+
 pub fn server_reachable() -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT));
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()

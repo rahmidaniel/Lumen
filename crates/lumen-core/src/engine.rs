@@ -148,10 +148,24 @@ impl DeviceInfo {
     }
 }
 
+/// A user-facing explanation for a failed connection attempt, when the cause
+/// is more than "OpenRGB isn't running yet".
+fn connection_problem(e: &crate::Error) -> Option<String> {
+    match e {
+        crate::Error::OpenRgb(openrgb_sdk::Error::Timeout) => {
+            Some("OpenRGB is running but not responding. Restart the OpenRGB service (or OpenRGB itself) to recover.".to_string())
+        }
+        crate::Error::OpenRgb(openrgb_sdk::Error::Io(_)) | crate::Error::OpenRgb(openrgb_sdk::Error::Disconnected) => None,
+        other => Some(format!("OpenRGB answered unexpectedly: {other}")),
+    }
+}
+
 /// Everything the UI needs that changes rarely.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Snapshot {
     pub connected: bool,
+    /// Why there is no connection, when the cause is more than "not running yet".
+    pub problem: Option<String>,
     pub paused: bool,
     /// Render/stream rate.
     pub fps: u32,
@@ -206,6 +220,7 @@ pub fn spawn(config: EngineConfig, scene: Scene) -> EngineHandle {
         config,
         scene,
         client: None,
+        problem: None,
         devices: Vec::new(),
         extras: HashMap::new(),
         held: HashSet::new(),
@@ -229,6 +244,8 @@ struct Engine {
     config: EngineConfig,
     scene: Scene,
     client: Option<Client>,
+    /// Last connection failure worth telling the user about.
+    problem: Option<String>,
     devices: Vec<Device>,
     extras: HashMap<u32, DeviceExtras>,
     /// Devices a sidecar is currently talking to; not streamed until released.
@@ -273,9 +290,17 @@ impl Engine {
                     Ok(rx) => {
                         events = Some(rx);
                         backoff = Duration::from_secs(1);
+                        if self.problem.take().is_some() {
+                            self.publish();
+                        }
                     }
                     Err(e) => {
                         tracing::debug!(%e, "OpenRGB not reachable; retrying in {backoff:?}");
+                        let problem = connection_problem(&e);
+                        if problem != self.problem {
+                            self.problem = problem;
+                            self.publish();
+                        }
                         next_connect = Instant::now() + backoff;
                         backoff = (backoff * 2).min(Duration::from_secs(10));
                     }
@@ -392,7 +417,12 @@ impl Engine {
     async fn connect(&mut self) -> Result<mpsc::UnboundedReceiver<Event>> {
         let (client, events) = Client::connect(self.config.addr, &self.config.client_name).await?;
         self.client = Some(client);
-        self.reload_devices().await?;
+        if let Err(e) = self.reload_devices().await {
+            // Keep nothing of a half-initialised session: with the client still
+            // set, the run loop would consider us connected and never try again.
+            self.client = None;
+            return Err(e);
+        }
         Ok(events)
     }
 
@@ -430,6 +460,7 @@ impl Engine {
     fn publish(&self) {
         let snapshot = Snapshot {
             connected: self.client.is_some(),
+            problem: self.problem.clone(),
             paused: self.paused,
             fps: self.config.fps,
             devices: self.devices.iter().map(|d| DeviceInfo::from_device(d, self.extras.get(&d.id))).collect(),

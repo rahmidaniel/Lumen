@@ -148,6 +148,8 @@ export interface Scene {
 
 export interface Snapshot {
   connected: boolean;
+  /** Why there is no connection, when the cause is more than "not running yet". */
+  problem: string | null;
   paused: boolean;
   /** Render/stream rate. */
   fps: number;
