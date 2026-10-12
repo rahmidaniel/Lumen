@@ -124,8 +124,72 @@ function mousePath(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
 type BodyState = "idle" | "hover" | "selected";
 
+/** Graphics card from the fan side: I/O bracket on the left, fans across the shroud. */
+function drawGpuBody(ctx: CanvasRenderingContext2D, w: number, h: number, radius: number, bracket: number, fans: number, state: BodyState, s: number) {
+  // I/O bracket: a plate slightly taller than the card, with its screw slots.
+  const ext = Math.min(8, h * 0.07);
+  roundRectPath(ctx, 0, -ext, bracket, h + 2 * ext, Math.min(2, bracket * 0.2));
+  ctx.fillStyle = "rgb(255 255 255 / 0.06)";
+  ctx.fill();
+  ctx.lineWidth = 1 / s;
+  ctx.strokeStyle = "rgb(255 255 255 / 0.12)";
+  ctx.stroke();
+  for (const y of [-ext * 0.4, h + ext * 0.4]) {
+    roundRectPath(ctx, bracket * 0.25, y - 0.6, bracket * 0.5, 1.2, 0.6);
+    ctx.fillStyle = "rgb(0 0 0 / 0.4)";
+    ctx.fill();
+  }
+
+  // Shroud.
+  roundRectPath(ctx, bracket, 0, w - bracket, h, radius);
+  ctx.fillStyle = "rgb(19 23 33 / 0.95)";
+  ctx.fill();
+  ctx.lineWidth = (state === "idle" ? 1 : 1.6) / s;
+  ctx.strokeStyle = state === "selected" ? "#8b6cff" : state === "hover" ? "rgb(255 255 255 / 0.4)" : "rgb(255 255 255 / 0.13)";
+  ctx.stroke();
+
+  // Fans: ring, swept blades and hub. Decoration only.
+  const pad = (w - bracket) * 0.03;
+  const pitch = (w - bracket - 2 * pad) / fans;
+  const r = Math.min(h * 0.4, pitch * 0.45);
+  const hub = r * 0.22;
+  const cy = h * 0.55;
+  for (let i = 0; i < fans; i++) {
+    const cx = bracket + pad + pitch * (i + 0.5);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgb(255 255 255 / 0.02)";
+    ctx.fill();
+    ctx.lineWidth = 1.2 / s;
+    ctx.strokeStyle = "rgb(255 255 255 / 0.1)";
+    ctx.stroke();
+    ctx.lineWidth = 1 / s;
+    ctx.strokeStyle = "rgb(255 255 255 / 0.045)";
+    for (let k = 0; k < 9; k++) {
+      const a = (k / 9) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx + hub * Math.cos(a), cy + hub * Math.sin(a));
+      ctx.quadraticCurveTo(
+        cx + r * 0.62 * Math.cos(a + 0.55),
+        cy + r * 0.62 * Math.sin(a + 0.55),
+        cx + r * 0.94 * Math.cos(a + 0.95),
+        cy + r * 0.94 * Math.sin(a + 0.95),
+      );
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(cx, cy, hub, 0, Math.PI * 2);
+    ctx.fillStyle = "rgb(255 255 255 / 0.07)";
+    ctx.fill();
+  }
+}
+
 function drawBody(ctx: CanvasRenderingContext2D, g: DeviceGeometry, state: BodyState, s: number) {
   const { width: w, height: h, body } = g;
+  if (body.type === "gpu") {
+    drawGpuBody(ctx, w, h, body.radius, body.bracket, body.fans, state, s);
+    return;
+  }
   if (body.type === "mouse") mousePath(ctx, w, h);
   else roundRectPath(ctx, 0, 0, w, h, body.radius);
 
@@ -156,6 +220,26 @@ function glyphPath(ctx: CanvasRenderingContext2D, led: LedGlyph, inflate = 1) {
     case "cell":
       roundRectPath(ctx, led.x - (g.w * inflate) / 2, led.y - (g.h * inflate) / 2, g.w * inflate, g.h * inflate, Math.min(g.w, g.h) * 0.15);
       break;
+    case "iso_enter": {
+      // Upper half full width, lower half narrower and flush right.
+      const w = g.w * inflate;
+      const h = g.h * inflate;
+      const x0 = led.x - w / 2;
+      const y0 = led.y - h / 2;
+      const notch = (g.w - g.lower_w) * inflate;
+      const ym = y0 + h / 2;
+      const r = Math.min(w, h) * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(x0 + r, y0);
+      ctx.arcTo(x0 + w, y0, x0 + w, y0 + h, r);
+      ctx.arcTo(x0 + w, y0 + h, x0 + notch, y0 + h, r);
+      ctx.arcTo(x0 + notch, y0 + h, x0 + notch, ym, r);
+      ctx.arcTo(x0 + notch, ym, x0, ym, r);
+      ctx.arcTo(x0, ym, x0, y0, r);
+      ctx.arcTo(x0, y0, x0 + w, y0, r);
+      ctx.closePath();
+      break;
+    }
     case "dot":
       ctx.beginPath();
       ctx.arc(led.x, led.y, g.r * inflate, 0, Math.PI * 2);
@@ -181,7 +265,7 @@ function drawGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb | null, 
     ctx.stroke();
     return;
   }
-  if (g.type === "key") {
+  if (g.type === "key" || g.type === "iso_enter") {
     // Keycaps keep a dark base so unlit keys still read as keys.
     const k = 0.92 * lit;
     ctx.fillStyle = c ? `rgb(${Math.round(KEY_BASE[0] + (c[0] - KEY_BASE[0]) * k)} ${Math.round(KEY_BASE[1] + (c[1] - KEY_BASE[1]) * k)} ${Math.round(KEY_BASE[2] + (c[2] - KEY_BASE[2]) * k)})` : UNLIT;

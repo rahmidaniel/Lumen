@@ -57,12 +57,14 @@ export interface LedPoint {
 
 export type Body =
   | { type: "rect"; radius: number }
-  | { type: "keyboard"; radius: number }
+  | { type: "keyboard"; radius: number; layout: "ansi" | "iso" | null }
   | { type: "mat"; radius: number }
-  | { type: "mouse" };
+  | { type: "mouse" }
+  | { type: "gpu"; radius: number; bracket: number; fans: number };
 
 export type Glyph =
   | { type: "key"; w: number; h: number }
+  | { type: "iso_enter"; w: number; h: number; lower_w: number }
   | { type: "cell"; w: number; h: number }
   | { type: "dot"; r: number }
   | { type: "strip"; points: [number, number][]; width: number };

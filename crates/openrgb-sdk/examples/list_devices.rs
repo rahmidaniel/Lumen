@@ -26,6 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let matrix = z.matrix.as_ref().map(|m| format!("{}×{} matrix", m.width, m.height)).unwrap_or_default();
             println!("  zone {:<28} {:<7} {:>4} LEDs  {}", z.name, z.kind.label(), z.leds_count, matrix);
         }
+        if std::env::args().any(|a| a == "--leds") {
+            for (i, led) in dev.leds.iter().enumerate() {
+                println!("  led {i:>3} {:?}", led.name);
+            }
+        }
         for (i, m) in dev.modes.iter().enumerate() {
             let save = if m.flags.contains(ModeFlags::MANUAL_SAVE) { " [saveable]" } else { "" };
             let per_led = if m.flags.contains(ModeFlags::HAS_PER_LED_COLOR) { " [per-led]" } else { "" };

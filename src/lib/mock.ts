@@ -1,5 +1,5 @@
 // In-browser stand-in for the Rust backend, used when the UI runs outside Tauri
-// (`npm run dev` in a browser). Fakes three devices and renders the layer stack
+// (`npm run dev` in a browser). Fakes four devices and renders the layer stack
 // with the same maths as crates/lumen-core so the preview looks right.
 
 import type { Backend } from "./ipc";
@@ -9,6 +9,7 @@ import type {
   DeviceInfo,
   Effect,
   FramePayload,
+  Glyph,
   Layer,
   Layout,
   LedGlyph,
@@ -21,6 +22,7 @@ import type {
   Snapshot,
   Stop,
 } from "./types";
+import layoutTable from "./keyboard-layout.json";
 
 // ---- fake hardware ---------------------------------------------------------
 
@@ -41,9 +43,22 @@ const TKL_ROWS: (string | null)[][] = [
   ["Left Control", "Left Windows", "Left Alt", null, null, "Space", null, null, "Right Alt", "Right Fn", "Menu", "Right Control", null, null, null, "Left Arrow", "Down Arrow", "Right Arrow", null],
 ];
 
+/** `?layout=iso` in the browser shows the ISO variant: no ANSI backslash, `#` beside Enter, `\` beside Left Shift. */
+function keyboardRows(): (string | null)[][] {
+  const iso = typeof location !== "undefined" && new URLSearchParams(location.search).get("layout") === "iso";
+  if (!iso) return TKL_ROWS;
+  return TKL_ROWS.map((row, r) => {
+    const out = row.map((k) => (k === "\\ (ANSI)" ? null : k));
+    if (r === 3) out.splice(out.indexOf("Enter"), 0, "#");
+    if (r === 4) out.splice(1, 0, "\\ (ISO)");
+    while (out.length > row.length) out.pop();
+    return out;
+  });
+}
+
 function buildKeyboard(): { matrix: (number | null)[][]; names: string[] } {
   const names: string[] = [];
-  const matrix = TKL_ROWS.map((row) =>
+  const matrix = keyboardRows().map((row) =>
     row.map((key) => {
       if (key === null) return null;
       names.push(`Key: ${key}`);
@@ -111,6 +126,23 @@ const devices: MockDevice[] = [
     onboard: null,
     names: ["Scroll wheel", "Logo"],
   },
+  {
+    id: 0x1a2b3c04,
+    name: "ASUS TUF GeForce RTX 3080 Gaming OC",
+    display_name: "ASUS TUF GeForce RTX 3080 Gaming OC",
+    kind: 2,
+    kind_label: "gpu",
+    vendor: "ASUS",
+    serial: "MOCK-GPU",
+    location: "mock",
+    led_count: 4,
+    zones: [{ name: "GPU", kind: 1, led_count: 4, matrix: null }],
+    saveable_modes: [],
+    streamable: true,
+    battery: null,
+    onboard: null,
+    names: ["LED 0", "LED 1", "LED 2", "LED 3"],
+  },
 ];
 
 function defaultPlacement(kind: number): Placement {
@@ -121,6 +153,8 @@ function defaultPlacement(kind: number): Placement {
       return { x: 430, y: 8, width: 65, height: 125, rotation: 0 };
     case 7:
       return { x: -200, y: -120, width: 900, height: 400, rotation: 0 };
+    case 2:
+      return { x: 0, y: 330, width: 290, height: 110, rotation: 0 };
     default:
       return { x: 0, y: 480, width: 150, height: 100, rotation: 0 };
   }
@@ -198,12 +232,71 @@ function roundedLoop(w: number, h: number, radius: number, inset: number) {
   };
 }
 
+type SlotRow = [number, number, number, string];
+
+/** Mirrors canvas.rs `physical_key_glyphs`: standard key names go to real positions, in key units. */
+function physicalKeyboard(d: MockDevice, matrix: (number | null)[][], w: number, h: number): DeviceGeometry | null {
+  const layout: "ansi" | "iso" = d.names.some((n) => n === "Key: \\ (ISO)" || n === "Key: #" || n === "Key: Enter (ISO)") ? "iso" : "ansi";
+  const table = (layoutTable as unknown as Record<string, Record<string, SlotRow>>)[layout];
+  const rowY = (row: number) => (row === 0 ? 0 : row + 0.5);
+  type Item = { led: number; x: number; y: number; w: number; h: number; shape: string };
+  const items: Item[] = [];
+  const extras: { led: number; row: number; col: number }[] = [];
+  const rows = matrix.length;
+  const cols = matrix[0].length;
+  matrix.forEach((row, r) =>
+    row.forEach((led, c) => {
+      if (led === null) return;
+      const name = d.names[led] ?? "";
+      if (!name) return;
+      const s = table[name];
+      if (s) items.push({ led, x: s[1], y: rowY(s[0]), w: s[2], h: s[3] === "plain" ? 1 : 2, shape: s[3] });
+      else extras.push({ led, row: r, col: c });
+    }),
+  );
+  if (!items.length) return null;
+  let [minX, maxX, minY, maxY] = [Infinity, -Infinity, Infinity, -Infinity];
+  for (const it of items) {
+    minX = Math.min(minX, it.x);
+    maxX = Math.max(maxX, it.x + it.w);
+    minY = Math.min(minY, it.y);
+    maxY = Math.max(maxY, it.y + it.h);
+  }
+  for (const e of extras) {
+    items.push({
+      led: e.led,
+      x: minX + ((e.col + 0.5) / cols) * (maxX - minX) - 0.5,
+      y: rows === 6 ? rowY(e.row) : minY + (e.row / Math.max(1, rows - 1)) * (maxY - 1 - minY),
+      w: 1,
+      h: 1,
+      shape: "plain",
+    });
+  }
+  const margin = 0.4;
+  const spanX = maxX - minX + 2 * margin;
+  const spanY = maxY - minY + 2 * margin;
+  const unit = Math.min(w / spanX, h / spanY);
+  const ox = (w - spanX * unit) / 2 + (margin - minX) * unit;
+  const oy = (h - spanY * unit) / 2 + (margin - minY) * unit;
+  const gap = unit * 0.1;
+  const leds: LedGlyph[] = items.map((it) => {
+    const glyph: Glyph =
+      it.shape === "iso_enter"
+        ? { type: "iso_enter", w: it.w * unit - gap, h: it.h * unit - gap, lower_w: 1.25 * unit - gap }
+        : { type: "key", w: it.w * unit - gap, h: it.h * unit - gap };
+    return { zone: 0, led: it.led, x: ox + (it.x + it.w / 2) * unit, y: oy + (it.y + it.h / 2) * unit, glyph };
+  });
+  return { device: d.id, width: w, height: h, body: { type: "keyboard", radius: Math.min(8, Math.max(2, Math.min(w, h) * 0.04)), layout }, leds };
+}
+
 function deviceGeometry(d: MockDevice, p: Placement): DeviceGeometry {
   const w = Math.max(1, p.width);
   const h = Math.max(1, p.height);
   const leds: LedGlyph[] = [];
 
   if (d.matrix) {
+    const physical = physicalKeyboard(d, d.matrix, w, h);
+    if (physical) return physical;
     const rows = d.matrix.length;
     const cols = d.matrix[0].length;
     const cellW = w / cols;
@@ -229,7 +322,7 @@ function deviceGeometry(d: MockDevice, p: Placement): DeviceGeometry {
         leds.push({ zone: 0, led, x: kx, y: cy, glyph: { type: "key", w: kw, h: cellH - 2 * padY } });
       });
     });
-    return { device: d.id, width: w, height: h, body: { type: "keyboard", radius: Math.min(8, Math.max(2, Math.min(w, h) * 0.04)) }, leds };
+    return { device: d.id, width: w, height: h, body: { type: "keyboard", radius: Math.min(8, Math.max(2, Math.min(w, h) * 0.04)), layout: null }, leds };
   }
 
   if (d.kind === 7) {
@@ -249,6 +342,33 @@ function deviceGeometry(d: MockDevice, p: Placement): DeviceGeometry {
       leds.push({ zone: 0, led: i, x, y, glyph: { type: "strip", points, width } });
     }
     return { device: d.id, width: w, height: h, body: { type: "mat", radius }, leds };
+  }
+
+  if (d.kind === 2) {
+    // Graphics card: segmented light bar along the top edge (second zone: bottom edge).
+    const bracket = Math.min(14, Math.max(6, w * 0.045));
+    const fans = Math.min(3, Math.max(1, Math.round((w - bracket) / (h * 0.95))));
+    const width = Math.min(8, Math.max(3, h * 0.055));
+    const inset = width / 2 + Math.min(6, Math.max(3, h * 0.05));
+    let rank = 0;
+    let offset = 0;
+    for (const [zi, z] of d.zones.entries()) {
+      const n = z.led_count;
+      const y = rank === 0 ? inset : h - inset;
+      const card = w - bracket;
+      const x0 = bracket + card * (n === 1 ? 0.6 : 0.36);
+      const x1 = w - card * 0.05;
+      const seg = (x1 - x0) / n;
+      const gap = Math.min(3, seg * 0.12);
+      for (let i = 0; i < n; i++) {
+        const a = x0 + seg * i + gap;
+        const b = x0 + seg * (i + 1) - gap;
+        leds.push({ zone: zi, led: offset + i, x: (a + b) / 2, y, glyph: { type: "strip", points: [[a, y], [b, y]], width } });
+      }
+      rank++;
+      offset += n;
+    }
+    return { device: d.id, width: w, height: h, body: { type: "gpu", radius: Math.min(8, Math.max(2, h * 0.06)), bracket, fans }, leds };
   }
 
   // Mouse: single-LED zones stacked down the centre.

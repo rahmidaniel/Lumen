@@ -49,6 +49,8 @@ function BatteryGauge({ battery }: { battery: Battery }) {
 
 function DeviceCard({ device, active, onSelect }: { device: DeviceInfo; active: boolean; onSelect: () => void }) {
   const Icon = icons[device.kind_label] ?? Cpu;
+  const body = useStore((s) => s.snapshot?.geometry.find((g) => g.device === device.id)?.body);
+  const layout = body?.type === "keyboard" ? body.layout : null;
   const zones = device.zones.length;
   return (
     <button
@@ -70,6 +72,7 @@ function DeviceCard({ device, active, onSelect }: { device: DeviceInfo; active: 
           <div className="mt-2 flex flex-wrap gap-1">
             {device.streamable ? <Badge tone="ok">live</Badge> : <Badge tone="warn">no per-LED mode</Badge>}
             {device.onboard && <Badge tone="accent">onboard memory</Badge>}
+            {layout && <Badge tone="neutral">{layout.toUpperCase()}</Badge>}
           </div>
         </div>
         {device.battery && <BatteryGauge battery={device.battery} />}

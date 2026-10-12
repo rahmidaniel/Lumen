@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use openrgb_sdk::{Device, DeviceType, MatrixMap};
 use serde::{Deserialize, Serialize};
 
+use crate::keyboard::{self, Layout as KeyboardLayout, Shape};
+
 /// A device's footprint on the desk.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Placement {
@@ -88,12 +90,15 @@ pub fn default_placement(kind: DeviceType, ordinal: usize) -> Placement {
 pub enum Body {
     /// Generic rounded rectangle.
     Rect { radius: f32 },
-    /// Keyboard case.
-    Keyboard { radius: f32 },
+    /// Keyboard case; `layout` is known when the keys were placed physically.
+    Keyboard { radius: f32, layout: Option<KeyboardLayout> },
     /// Mouse mat with a lit edge.
     Mat { radius: f32 },
     /// Mouse silhouette.
     Mouse,
+    /// Graphics card seen from the fan side: I/O bracket on the left (that
+    /// many mm wide), decorative fans, lighting along the top edge.
+    Gpu { radius: f32, bracket: f32, fans: u8 },
 }
 
 /// How one LED is drawn, centred on the glyph's (x, y) unless it is a strip.
@@ -102,6 +107,8 @@ pub enum Body {
 pub enum Glyph {
     /// Keycap.
     Key { w: f32, h: f32 },
+    /// ISO Enter keycap: `w` × `h` bounding box whose lower half is `lower_w` wide and flush right.
+    IsoEnter { w: f32, h: f32, lower_w: f32 },
     /// Square cell of a non-keyboard matrix.
     Cell { w: f32, h: f32 },
     /// Point light.
@@ -193,23 +200,31 @@ fn normalize(points: &mut [LedPoint]) {
 pub fn device_geometry(device: &Device, p: &Placement) -> DeviceGeometry {
     let (w, h) = (p.width.max(1.0), p.height.max(1.0));
     let mat_radius = (w.min(h) * 0.06).clamp(4.0, 40.0);
-    let body = match device.kind {
-        DeviceType::KEYBOARD | DeviceType::KEYPAD => Body::Keyboard { radius: (w.min(h) * 0.04).clamp(2.0, 8.0) },
-        DeviceType::MOUSEMAT => Body::Mat { radius: mat_radius },
-        DeviceType::MOUSE => Body::Mouse,
-        _ => Body::Rect { radius: (w.min(h) * 0.08).clamp(2.0, 12.0) },
-    };
+    let gpu_bracket = (w * 0.045).clamp(6.0, 14.0);
+    // Keyboards whose LED names follow OpenRGB's "Key: …" convention are laid
+    // out on a real ANSI/ISO layout instead of the firmware's logical grid.
+    let key_layout = matches!(device.kind, DeviceType::KEYBOARD | DeviceType::KEYPAD)
+        .then(|| KeyboardLayout::detect(device.leds.iter().map(|l| l.name.as_str())))
+        .flatten();
+    let mut physical = false;
 
     let has_matrix = |z: &openrgb_sdk::Zone| z.matrix.as_ref().is_some_and(|m| m.width > 0 && m.height > 0);
     let line_zones = device.zones.iter().filter(|z| !has_matrix(z) && z.leds_count > 1).count();
     let single_zones = device.zones.iter().filter(|z| !has_matrix(z) && z.leds_count == 1).count();
-    let (mut line_rank, mut single_rank, mut offset) = (0usize, 0usize, 0usize);
+    let (mut line_rank, mut single_rank, mut gpu_rank, mut offset) = (0usize, 0usize, 0usize, 0usize);
 
     let mut leds = Vec::with_capacity(device.leds.len());
     for (zi, zone) in device.zones.iter().enumerate() {
         let count = zone.leds_count as usize;
         match &zone.matrix {
-            Some(m) if m.width > 0 && m.height > 0 => matrix_glyphs(device, zi, offset, m, w, h, &mut leds),
+            Some(m) if m.width > 0 && m.height > 0 => match key_layout {
+                Some(layout) if physical_key_glyphs(device, zi, offset, m, layout, w, h, &mut leds) => physical = true,
+                _ => matrix_glyphs(device, zi, offset, m, w, h, &mut leds),
+            },
+            _ if device.kind == DeviceType::GPU && count >= 1 => {
+                gpu_bar_glyphs(zi, offset, count, w, h, gpu_bracket, gpu_rank, &mut leds);
+                gpu_rank += 1;
+            }
             _ if count == 1 => {
                 let y = h * (single_rank as f32 + 1.0) / (single_zones as f32 + 1.0);
                 single_rank += 1;
@@ -231,6 +246,19 @@ pub fn device_geometry(device: &Device, p: &Placement) -> DeviceGeometry {
     }
     leds.retain(|g| g.led < device.leds.len());
 
+    let body = match device.kind {
+        DeviceType::KEYBOARD | DeviceType::KEYPAD => {
+            Body::Keyboard { radius: (w.min(h) * 0.04).clamp(2.0, 8.0), layout: key_layout.filter(|_| physical) }
+        }
+        DeviceType::MOUSEMAT => Body::Mat { radius: mat_radius },
+        DeviceType::MOUSE => Body::Mouse,
+        DeviceType::GPU => Body::Gpu {
+            radius: (h * 0.06).clamp(2.0, 8.0),
+            bracket: gpu_bracket,
+            fans: (((w - gpu_bracket) / (h * 0.95)).round() as i32).clamp(1, 3) as u8,
+        },
+        _ => Body::Rect { radius: (w.min(h) * 0.08).clamp(2.0, 12.0) },
+    };
     DeviceGeometry { device: device.id, width: w, height: h, body, leds }
 }
 
@@ -247,6 +275,85 @@ fn key_units(name: &str) -> f32 {
         | "Key: Right Control" | "Key: Right Windows" => 1.25,
         _ => 1.0,
     }
+}
+
+/// Lay a matrix zone out as a real keyboard: standard key names go to their
+/// physical slots (see [`keyboard::slot`]), other named LEDs keep their relative
+/// matrix position, unnamed filler cells get no glyph. The result is scaled to
+/// fit the device footprint with the key proportions kept. Returns `false`
+/// when no key could be placed, so the caller can fall back to the grid.
+#[allow(clippy::too_many_arguments)]
+fn physical_key_glyphs(
+    device: &Device,
+    zone: usize,
+    offset: usize,
+    m: &MatrixMap,
+    layout: KeyboardLayout,
+    w: f32,
+    h: f32,
+    out: &mut Vec<LedGlyph>,
+) -> bool {
+    struct Item {
+        led: usize,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        shape: Shape,
+    }
+    let mut items: Vec<Item> = Vec::new();
+    let mut extras: Vec<(usize, u32, u32)> = Vec::new();
+    for row in 0..m.height {
+        for col in 0..m.width {
+            let Some(i) = m.led_at(row, col) else { continue };
+            let led = offset + i as usize;
+            let name = device.leds.get(led).map(|l| l.name.as_str()).unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            match keyboard::slot(name, layout) {
+                Some(s) => items.push(Item { led, x: s.x, y: s.y(), w: s.w, h: s.h(), shape: s.shape }),
+                None => extras.push((led, row, col)),
+            }
+        }
+    }
+    if items.is_empty() {
+        return false;
+    }
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for it in &items {
+        min_x = min_x.min(it.x);
+        max_x = max_x.max(it.x + it.w);
+        min_y = min_y.min(it.y);
+        max_y = max_y.max(it.y + it.h);
+    }
+    // LEDs with non-standard names (media keys, logos) keep their matrix
+    // position, scaled into the same span as the placed keys.
+    for (led, row, col) in extras {
+        let x = min_x + (col as f32 + 0.5) / m.width as f32 * (max_x - min_x) - 0.5;
+        let y = if m.height == 6 {
+            keyboard::row_y(row as u8)
+        } else {
+            min_y + row as f32 / (m.height.max(2) - 1) as f32 * (max_y - 1.0 - min_y)
+        };
+        items.push(Item { led, x, y, w: 1.0, h: 1.0, shape: Shape::Plain });
+    }
+
+    let margin = 0.4;
+    let span_x = max_x - min_x + 2.0 * margin;
+    let span_y = max_y - min_y + 2.0 * margin;
+    let unit = (w / span_x).min(h / span_y);
+    let ox = (w - span_x * unit) / 2.0 + (margin - min_x) * unit;
+    let oy = (h - span_y * unit) / 2.0 + (margin - min_y) * unit;
+    let gap = unit * 0.1;
+    for it in items {
+        let glyph = match it.shape {
+            Shape::IsoEnter => Glyph::IsoEnter { w: it.w * unit - gap, h: it.h * unit - gap, lower_w: 1.25 * unit - gap },
+            _ => Glyph::Key { w: it.w * unit - gap, h: it.h * unit - gap },
+        };
+        out.push(LedGlyph { zone, led: it.led, x: ox + (it.x + it.w / 2.0) * unit, y: oy + (it.y + it.h / 2.0) * unit, glyph });
+    }
+    true
 }
 
 fn matrix_glyphs(device: &Device, zone: usize, offset: usize, m: &MatrixMap, w: f32, h: f32, out: &mut Vec<LedGlyph>) {
@@ -299,6 +406,28 @@ fn line_glyphs(zone: usize, offset: usize, count: usize, w: f32, h: f32, y: f32,
     let r = (pitch * 0.35).min(h * 0.3).clamp(1.5, 6.0);
     for i in 0..count {
         out.push(LedGlyph { zone, led: offset + i, x: pitch * (i as f32 + 0.5), y, glyph: Glyph::Dot { r } });
+    }
+}
+
+/// Graphics card lighting: a segmented light bar along the top edge (the edge
+/// that faces the side panel), right of centre where logos sit. A second zone
+/// gets the bottom edge; further ones fall back to a row across the card.
+fn gpu_bar_glyphs(zone: usize, offset: usize, count: usize, w: f32, h: f32, bracket: f32, rank: usize, out: &mut Vec<LedGlyph>) {
+    if rank >= 2 {
+        return line_glyphs(zone, offset, count, w, h, h * 0.5, out);
+    }
+    let width = (h * 0.055).clamp(3.0, 8.0);
+    let inset = width / 2.0 + (h * 0.05).clamp(3.0, 6.0);
+    let y = if rank == 0 { inset } else { h - inset };
+    let card = w - bracket;
+    let x0 = bracket + card * if count == 1 { 0.6 } else { 0.36 };
+    let x1 = w - card * 0.05;
+    let seg = (x1 - x0) / count as f32;
+    let gap = (seg * 0.12).min(3.0);
+    for i in 0..count {
+        let a = x0 + seg * i as f32 + gap;
+        let b = x0 + seg * (i as f32 + 1.0) - gap;
+        out.push(LedGlyph { zone, led: offset + i, x: (a + b) / 2.0, y, glyph: Glyph::Strip { points: vec![[a, y], [b, y]], width } });
     }
 }
 
@@ -459,8 +588,11 @@ mod tests {
         let n = MatrixMap::NO_LED;
         let m = MatrixMap { height: 1, width: 9, map: vec![0, 1, 2, n, n, 3, n, n, 4] };
         let names = vec!["Key: Left Shift", "Key: Z", "Key: X", "Key: Space", "Key: Enter"];
-        let d = device(1, DeviceType::KEYBOARD, vec![zone("Keys", ZoneType::MATRIX, 5, Some(m))], Some(names));
-        let g = device_geometry(&d, &placement(180.0, 20.0)); // 20 mm cells
+        let d = device(1, DeviceType::KEYBOARD, vec![zone("Keys", ZoneType::MATRIX, 5, Some(m.clone()))], Some(names));
+        // Standard names take the physical layout; this exercises the grid fallback directly.
+        let mut leds = Vec::new();
+        matrix_glyphs(&d, 0, 0, &m, 180.0, 20.0, &mut leds); // 20 mm cells
+        let g = DeviceGeometry { device: 1, width: 180.0, height: 20.0, body: Body::Rect { radius: 0.0 }, leds };
         let width = |i: usize| match g.leds[i].glyph {
             Glyph::Key { w, .. } => w,
             _ => panic!("expected keycaps"),
@@ -505,6 +637,80 @@ mod tests {
         assert_eq!(g.body, Body::Mouse);
         assert_eq!(g.leds.len(), 2);
         assert!((g.leds[0].x - 30.0).abs() < 1e-3 && g.leds[0].y < g.leds[1].y);
+    }
+
+    fn tkl_names() -> Vec<&'static str> {
+        vec![
+            "Key: Escape", "", "Key: F1", "Key: F2", "Key: F3", "Key: F4", "Key: F5", "Key: F6", "Key: F7", "Key: F8", "Key: F9", "Key: F10", "Key: F11", "Key: F12", "", "", "",
+            "Key: `", "Key: 1", "Key: 2", "Key: 3", "Key: 4", "Key: 5", "Key: 6", "Key: 7", "Key: 8", "Key: 9", "Key: 0", "Key: -", "Key: =", "Key: Backspace", "Key: Insert", "Key: Home", "Key: Page Up",
+            "Key: Tab", "Key: Q", "Key: W", "Key: E", "Key: R", "Key: T", "Key: Y", "Key: U", "Key: I", "Key: O", "Key: P", "Key: [", "Key: ]", "Key: \\ (ANSI)", "Key: Delete", "Key: End", "Key: Page Down",
+            "Key: Caps Lock", "Key: A", "Key: S", "Key: D", "Key: F", "Key: G", "Key: H", "Key: J", "Key: K", "Key: L", "Key: ;", "Key: '", "", "Key: Enter", "", "", "",
+            "Key: Left Shift", "", "Key: Z", "Key: X", "Key: C", "Key: V", "Key: B", "Key: N", "Key: M", "Key: ,", "Key: .", "Key: /", "", "Key: Right Shift", "", "Key: Up Arrow", "",
+            "Key: Left Control", "Key: Left Windows", "Key: Left Alt", "", "", "", "Key: Space", "", "", "", "Key: Right Alt", "Key: Right Fn", "Key: Menu", "Key: Right Control", "Key: Left Arrow", "Key: Down Arrow", "Key: Right Arrow",
+        ]
+    }
+
+    #[test]
+    fn standard_key_names_get_a_physical_layout() {
+        // The DeathStalker V2 Pro TKL as OpenRGB reports it: a full 17×6 grid with unnamed filler cells.
+        let names = tkl_names();
+        assert_eq!(names.len(), 102);
+        let m = MatrixMap { height: 6, width: 17, map: (0..102).collect() };
+        let d = device(1, DeviceType::KEYBOARD, vec![zone("Keyboard", ZoneType::MATRIX, 102, Some(m))], Some(names.clone()));
+        let g = device_geometry(&d, &placement(360.0, 140.0));
+        assert!(matches!(g.body, Body::Keyboard { layout: Some(KeyboardLayout::Ansi), .. }), "{:?}", g.body);
+        assert_eq!(g.leds.len(), names.iter().filter(|n| !n.is_empty()).count(), "filler cells get no glyph");
+        let width = |key: &str| {
+            let i = names.iter().position(|n| *n == key).unwrap();
+            match g.leds.iter().find(|l| l.led == i).unwrap().glyph {
+                Glyph::Key { w, .. } => w,
+                ref other => panic!("{key}: {other:?}"),
+            }
+        };
+        let unit = width("Key: 1") / 0.9; // caps are their nominal width minus a 0.1 u gap
+        assert!((width("Key: Backspace") - 1.9 * unit).abs() < 1e-3);
+        assert!((width("Key: Enter") - 2.15 * unit).abs() < 1e-3);
+        assert!((width("Key: Space") - 6.15 * unit).abs() < 1e-3);
+        assert!((width("Key: Left Shift") - 2.15 * unit).abs() < 1e-3);
+        for l in &g.leds {
+            assert!(l.x > 0.0 && l.x < 360.0 && l.y > 0.0 && l.y < 140.0, "{l:?}");
+        }
+    }
+
+    #[test]
+    fn iso_names_give_an_iso_enter_and_short_left_shift() {
+        let names = vec!["Key: Left Shift", "Key: \\ (ISO)", "Key: Z", "Key: #", "Key: Enter"];
+        let m = MatrixMap { height: 1, width: 5, map: (0..5).collect() };
+        let d = device(1, DeviceType::KEYBOARD, vec![zone("Keyboard", ZoneType::MATRIX, 5, Some(m))], Some(names));
+        let g = device_geometry(&d, &placement(360.0, 140.0));
+        assert!(matches!(g.body, Body::Keyboard { layout: Some(KeyboardLayout::Iso), .. }));
+        let unit = match g.leds[2].glyph {
+            Glyph::Key { w, .. } => w / 0.9,
+            ref o => panic!("{o:?}"),
+        };
+        match g.leds[0].glyph {
+            Glyph::Key { w, .. } => assert!((w - 1.15 * unit).abs() < 1e-3, "ISO left shift is 1.25 u"),
+            ref o => panic!("{o:?}"),
+        }
+        assert!(matches!(g.leds[4].glyph, Glyph::IsoEnter { .. }));
+        assert!(g.leds[4].y < g.leds[0].y, "ISO Enter is centred above the shift row");
+    }
+
+    #[test]
+    fn gpu_lighting_is_a_bar_along_the_top_edge() {
+        let d = device(4, DeviceType::GPU, vec![zone("GPU", ZoneType::LINEAR, 4, None)], None);
+        let g = device_geometry(&d, &placement(290.0, 110.0));
+        let Body::Gpu { bracket, fans, .. } = g.body else { panic!("expected a GPU body, got {:?}", g.body) };
+        assert_eq!(fans, 3);
+        assert_eq!(g.leds.len(), 4);
+        for pair in g.leds.windows(2) {
+            assert!(pair[0].x < pair[1].x, "segments run left to right");
+        }
+        for led in &g.leds {
+            assert!(led.y < 110.0 * 0.15, "bar sits on the top edge: y = {}", led.y);
+            assert!(led.x > bracket && led.x < 290.0, "bar stays on the card: x = {}", led.x);
+            assert!(matches!(led.glyph, Glyph::Strip { .. }));
+        }
     }
 
     #[test]

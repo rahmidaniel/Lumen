@@ -9,6 +9,7 @@
 pub mod canvas;
 pub mod effects;
 pub mod engine;
+pub mod keyboard;
 pub mod profile;
 pub mod render;
 pub mod scene;

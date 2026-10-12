@@ -129,7 +129,7 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
         checked ? "bg-accent" : "bg-border-strong",
       )}
     >
-      <span className={cx("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform", checked ? "translate-x-4.5" : "translate-x-0.5")} />
+      <span className={cx("absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform", checked ? "translate-x-4.5" : "translate-x-0.5")} />
     </button>
   );
 }
