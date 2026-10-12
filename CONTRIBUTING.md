@@ -122,9 +122,10 @@ engine or the preview path should keep the tray number where it is.
 
 ### Screenshots and the demo animation
 
-- `scripts/screenshots.ps1` captures `docs/screenshots/{devices,effects,paint,settings}.png`
-  from the running Windows app (it clicks through the UI with posted messages; the
-  window can stay behind others).
+- `scripts/screenshots.mjs` captures `docs/screenshots/*.png` from a running Lumen through
+  its WebView2's DevTools port: start Lumen (or `npm run tauri dev`) with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` set, then run it.
+  It clicks through the UI on its own and puts back whatever it changes.
 - `scripts/demo-capture.mjs` records `docs/screenshots/demo.webp`, the loop at the top of
   the README, from `npm run dev` in headless Edge or Chrome (`npm i --no-save sharp`
   first).

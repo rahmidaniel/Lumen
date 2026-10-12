@@ -40,6 +40,8 @@ together, and one place to see battery levels and manage devices.
   turns its screen off, and, if you like, when it locks or sits idle; it comes back when
   you do. A lights switch sits in the top bar, the tray and an optional shortcut. (Windows
   for now.)
+- **Device settings.** Polling rate, DPI stages, sleep timer and power saving on Razer
+  devices and the HyperX Pulsefire Haste 2: the things you used to keep the vendor app for.
 - **Boot lighting.** Where the hardware has onboard memory (Razer so far), Lumen writes the
   effect the device shows before any software has started.
 - **Profiles** for saving and switching whole scenes, from the app, the tray menu or the
@@ -86,15 +88,15 @@ SteelSeries, ASUS, MSI, Gigabyte, HyperX, NZXT, Cooler Master and many more. See
 
 Things OpenRGB does not do, Lumen does itself, per vendor:
 
-| Brand | Battery | Onboard boot lighting | Status |
-|---|---|---|---|
-| Razer | ✅ | ✅ | tested on hardware |
-| HyperX | ✅ | – | tested on hardware |
-| Logitech (HID++, Lightspeed/Unifying) | ✅ | – | from published protocol, untested |
-| Corsair (Bragi and legacy wireless) | ✅ | – | from published protocol, untested |
-| SteelSeries (Aerox, Prime, Rival) | ✅ | – | from published protocol, untested |
-| ASUS ROG wireless mice | ✅ | – | from published protocol, untested |
-| Glorious (CORE wireless) | ✅ | – | from published protocol, untested |
+| Brand | Battery | Device settings | Onboard boot lighting | Status |
+|---|---|---|---|---|
+| Razer | ✅ | polling rate, DPI stages, sleep timer, power saving | ✅ | tested on hardware; mouse DPI follows OpenRazer, no Razer mouse tried yet |
+| HyperX Pulsefire Haste 2 | ✅ | polling rate, DPI stages | – | tested on hardware |
+| Logitech (HID++, Lightspeed/Unifying) | ✅ | – | – | from published protocol, untested |
+| Corsair (Bragi and legacy wireless) | ✅ | – | – | from published protocol, untested |
+| SteelSeries (Aerox, Prime, Rival) | ✅ | – | – | from published protocol, untested |
+| ASUS ROG wireless mice | ✅ | – | – | from published protocol, untested |
+| Glorious (CORE wireless) | ✅ | – | – | from published protocol, untested |
 
 If you own one of the untested devices, a
 [device report](https://github.com/rahmidaniel/lumen/issues/new?template=device_report.yml)
@@ -102,15 +104,22 @@ of what Lumen shows is very welcome.
 
 ## Screenshots
 
-From the Windows build on real hardware. (The animation at the top is the browser build
-of the same UI, running on simulated devices.)
+From Lumen 0.3 on Windows, on real hardware: a Razer DeathStalker V2 Pro TKL and Strider
+Chroma, a HyperX Pulsefire Haste 2 Wireless and an ASUS TUF RTX 3080. (The animation at the
+top is the browser build of the same UI, running on simulated devices.)
 
 **Devices home.** Every device OpenRGB reports, drawn to scale on one desk: the keyboard
 on its real ANSI/ISO layout, the mat as an edge-lit loop, the mouse, the graphics card.
 Battery gauges (with cell voltage where the mouse reports it) sit next to the devices that
-have one, and selecting a Razer device offers its onboard boot lighting.
+have one.
 
 ![Devices home: keyboard, mat, mouse and GPU on the canvas, battery gauges in the panel](docs/screenshots/devices.png)
+
+**Device settings.** Select a device to change what you used to open its vendor app for:
+polling rate, DPI stages, sleep timer and power saving, as far as the device has them.
+Razer devices also take boot lighting, the effect they show before any software runs.
+
+![The DeathStalker selected: polling rate, sleep timer and power-saving threshold in the panel](docs/screenshots/device-settings.png)
 
 **Effects.** A layer stack: static colours, gradients, spectrum cycles, waves, breathing
 and starlight, each with opacity, blend mode and the devices it applies to. One wave
@@ -123,19 +132,22 @@ canvas, Shift to erase. Keys you leave alone keep showing the layers below.
 
 ![Paint mode: a few keys painted white on top of the running effect](docs/screenshots/paint.png)
 
-**Settings.** Start at login, how Lumen runs OpenRGB, the render rate, and updates.
+**Settings.** Start with Windows, lights that follow the PC (sleep, screen off, lock, idle),
+low-battery notifications and keyboard shortcuts; further down, how Lumen runs OpenRGB,
+the render rate, updates and *Copy diagnostics* for bug reports.
 
-![Settings: startup, OpenRGB status and management, performance and updates](docs/screenshots/settings.png)
+![Settings: startup, lights that follow the PC, alerts and shortcuts](docs/screenshots/settings.png)
 
 ## FAQ
 
 <details>
 <summary><b>Can I uninstall Synapse, G HUB, iCUE and the rest?</b></summary>
 
-For lighting and battery levels, yes. Lumen does not yet configure DPI, buttons, macros
-or firmware, so keep a vendor app around if you need those, but quit it (and stop it
-starting with your PC) while Lumen runs: two programs driving the same LEDs make them
-flicker between both.
+For lighting, battery levels and the common device settings (polling rate, DPI stages,
+sleep timer on Razer devices and the HyperX Pulsefire Haste 2), yes. Lumen does not remap
+buttons, record macros or update firmware yet, so keep a vendor app around if you need
+those, but quit it (and stop it starting with your PC) while Lumen runs: two programs
+driving the same LEDs make them flicker between both.
 </details>
 
 <details>
