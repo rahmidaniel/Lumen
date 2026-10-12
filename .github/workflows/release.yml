@@ -42,7 +42,7 @@ jobs:
             os: ubuntu-22.04
             args: ''
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Linux build dependencies (WebKitGTK, tray, hidapi)
         if: runner.os == 'Linux'
@@ -55,7 +55,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm

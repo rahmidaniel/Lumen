@@ -198,6 +198,8 @@ async function main() {
 
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
+  // Keep the folder tracked even when empty: tauri-build checks that resource paths exist.
+  writeFileSync(join(dest, ".gitkeep"), "");
 
   switch (platform) {
     case "windows":
