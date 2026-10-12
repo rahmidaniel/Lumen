@@ -8,6 +8,7 @@
 
 mod alerts;
 mod conflicts;
+mod device_settings;
 mod diagnostics;
 mod lights;
 mod openrgb;
@@ -89,6 +90,8 @@ struct AppState {
     current_profile: Mutex<Option<String>>,
     /// Where Lumen's log files go, when file logging could be set up.
     log_dir: Option<PathBuf>,
+    /// Device settings Lumen keeps re-applying (mice that forget them).
+    wanted: Arc<device_settings::Wanted>,
 }
 
 impl AppState {
@@ -185,6 +188,30 @@ async fn save_to_device(state: State<'_, AppState>, device_id: u32, effect: side
         .cloned()
         .ok_or_else(|| "device is no longer connected".to_string())?;
     sidecar::save_to_device(&state.engine, &device, effect).await
+}
+
+/// Read a device's own settings (polling rate, DPI, sleep timer, …).
+#[tauri::command]
+async fn device_settings(state: State<'_, AppState>, device_id: u32) -> CmdResult<device_settings::DeviceSettings> {
+    let target = settings_target(&state, device_id)?;
+    let (settings, persistence) = sidecar::with_device_held(&state.engine, device_id, move || device_settings::read(target)).await?;
+    Ok(device_settings::DeviceSettings { device: device_id, settings, persistence })
+}
+
+/// Change one device setting; returns what the device reports afterwards.
+#[tauri::command]
+async fn set_device_setting(state: State<'_, AppState>, device_id: u32, change: device_settings::Change) -> CmdResult<device_settings::DeviceSettings> {
+    let target = settings_target(&state, device_id)?;
+    let wanted = state.wanted.clone();
+    tracing::info!(device_id, ?change, "changing a device setting");
+    let (settings, persistence) = sidecar::with_device_held(&state.engine, device_id, move || device_settings::write(target, &change, &wanted)).await?;
+    Ok(device_settings::DeviceSettings { device: device_id, settings, persistence })
+}
+
+fn settings_target(state: &AppState, device_id: u32) -> CmdResult<sidecar::Target> {
+    let snapshot = state.engine.snapshot();
+    let device = snapshot.devices.iter().find(|d| d.id == device_id).ok_or_else(|| "device is no longer connected".to_string())?;
+    sidecar::target_for(&device.location).ok_or_else(|| "Lumen cannot change this device's settings.".to_string())
 }
 
 #[tauri::command]
@@ -699,6 +726,8 @@ pub fn run() {
             let settings = Settings::load(&dir);
             let config = EngineConfig { fps: settings.fps.unwrap_or(DEFAULT_FPS).clamp(15, 120), ..EngineConfig::default() };
 
+            let wanted = Arc::new(device_settings::Wanted::load(&dir));
+
             // The engine spawns Tokio tasks, so create it on Tauri's runtime.
             let engine = tauri::async_runtime::block_on(async { engine::spawn(config, scene) });
 
@@ -713,6 +742,7 @@ pub fn run() {
                 conflicts: Mutex::new(Vec::new()),
                 current_profile: Mutex::new(None),
                 log_dir,
+                wanted: wanted.clone(),
             });
             app.manage(updates::UpdateState::default());
 
@@ -768,7 +798,7 @@ pub fn run() {
             tauri::async_runtime::spawn(forward_snapshots(handle.clone(), engine.clone()));
             tauri::async_runtime::spawn(forward_frames(handle.clone(), engine.clone()));
             tauri::async_runtime::spawn(autosave_scene(engine.clone(), dir));
-            tauri::async_runtime::spawn(sidecar::run(engine.clone()));
+            tauri::async_runtime::spawn(sidecar::run(engine.clone(), wanted));
             tauri::async_runtime::spawn(battery_alerts(handle.clone(), engine.clone()));
             tauri::async_runtime::spawn(watch_conflicts(handle.clone()));
             {
@@ -794,6 +824,8 @@ pub fn run() {
             set_fps,
             refresh_devices,
             save_to_device,
+            device_settings,
+            set_device_setting,
             list_profiles,
             save_profile,
             load_profile,

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ConflictBanner } from "../../components/ConflictBanner";
 import { Badge, Button, ColorInput, Field, IconButton, Panel, Select, cx } from "../../components/ui";
 import type { Battery, DeviceInfo, OnboardEffect, Rgb } from "../../lib/types";
+import { DeviceSettingsSection } from "./DeviceSettingsSection";
 import { useStore } from "../../store";
 
 const icons: Record<string, typeof Cpu> = {
@@ -189,6 +190,7 @@ export function DevicesPanel() {
 
       {device && (
         <div className="mt-2 flex flex-col gap-4 rounded-lg border border-border bg-surface-2 p-3">
+          {device.configurable && <DeviceSettingsSection device={device} />}
           <div className="flex flex-col gap-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted">Zones</div>
             <ul className="flex flex-col gap-1 text-xs">

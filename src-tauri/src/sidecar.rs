@@ -8,6 +8,7 @@
 //! moment.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use hidapi::HidApi;
@@ -15,6 +16,8 @@ use lumen_core::engine::{Battery, Command, DeviceExtras, DeviceInfo, EngineHandl
 use lumen_vendor_hid::{asus, corsair, glorious, logitech, steelseries};
 use lumen_vendor_razer::{Effect as RazerEffect, RazerDevice, Store};
 use serde::Deserialize;
+
+use crate::device_settings::{self, Wanted};
 
 /// Built-in effects a device can store as its power-on lighting (UI contract).
 #[derive(Clone, Debug, Deserialize)]
@@ -134,7 +137,7 @@ enum Poll {
 /// device-list change, then every minute — with a quick retry while a device
 /// has never answered (wireless gear dozes and misses the first probe).
 /// Devices that turn out to have no battery are left alone afterwards.
-pub async fn run(engine: EngineHandle) {
+pub async fn run(engine: EngineHandle, wanted: Arc<Wanted>) {
     let mut snapshots = engine.watch_snapshot();
     let mut known: Vec<(u32, Target)> = Vec::new();
     let mut answered: HashSet<u32> = HashSet::new();
@@ -180,7 +183,7 @@ pub async fn run(engine: EngineHandle) {
             if unsupported.contains(&id) {
                 continue;
             }
-            match poll_device(&engine, id, target).await {
+            match poll_device(&engine, id, target, wanted.clone()).await {
                 Poll::Reading(extras) => {
                     answered.insert(id);
                     engine.send(Command::SetExtras(id, extras)).await;
@@ -220,8 +223,10 @@ impl From<lumen_vendor_hid::Error> for PollError {
     }
 }
 
-/// Query one device with its stream held, so the reply buffer is ours.
-async fn poll_device(engine: &EngineHandle, id: u32, target: Target) -> Poll {
+/// Query one device with its stream held, so the reply buffer is ours. A
+/// HyperX mouse also gets the settings the user chose put back if it has
+/// reset to its own.
+async fn poll_device(engine: &EngineHandle, id: u32, target: Target, wanted: Arc<Wanted>) -> Poll {
     let result: Result<DeviceExtras, PollError> = with_device_held(engine, id, move || {
         let api = HidApi::new().map_err(|e| e.to_string())?;
         match target {
@@ -237,14 +242,19 @@ async fn poll_device(engine: &EngineHandle, id: u32, target: Target) -> Poll {
                         None
                     }
                 };
-                Ok(DeviceExtras { battery, onboard: Some(Onboard::Razer) })
+                Ok(DeviceExtras { battery, onboard: Some(Onboard::Razer), settings: true })
             }
             Target::HyperX(pid) => {
                 let b = lumen_vendor_hyperx::read_battery(&api, pid).map_err(|e| e.to_string())?;
                 tracing::info!(pid = format_args!("{pid:#06x}"), percent = b.percent, charging = b.charging, millivolts = ?b.millivolts, "battery");
+                let configurable = lumen_vendor_hyperx::config::supports(pid);
+                if configurable {
+                    device_settings::reapply_hyperx(&api, pid, &wanted);
+                }
                 Ok(DeviceExtras {
                     battery: Some(Battery { percent: b.percent, charging: b.charging, millivolts: b.millivolts }),
                     onboard: None,
+                    settings: configurable,
                 })
             }
             Target::Logitech(pid) | Target::Glorious(pid) | Target::Asus(pid) | Target::SteelSeries(pid) | Target::Corsair(pid) => {
@@ -259,6 +269,7 @@ async fn poll_device(engine: &EngineHandle, id: u32, target: Target) -> Poll {
                 Ok(DeviceExtras {
                     battery: Some(Battery { percent: b.percent, charging: b.charging, millivolts: b.millivolts }),
                     onboard: None,
+                    settings: false,
                 })
             }
         }
@@ -274,13 +285,19 @@ async fn poll_device(engine: &EngineHandle, id: u32, target: Target) -> Poll {
     }
 }
 
+/// One vendor conversation at a time, across all devices: wireless receivers
+/// drop a request that arrives while they are relaying another, and a battery
+/// poll must not interleave with a settings write.
+static DEVICE_IO: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Hold the engine's stream to `id`, run the blocking HID work, release.
-async fn with_device_held<T, E, F>(engine: &EngineHandle, id: u32, work: F) -> Result<T, E>
+pub async fn with_device_held<T, E, F>(engine: &EngineHandle, id: u32, work: F) -> Result<T, E>
 where
     T: Send + 'static,
     E: Send + 'static + From<String>,
     F: FnOnce() -> Result<T, E> + Send + 'static,
 {
+    let _io = DEVICE_IO.lock().await;
     engine.send(Command::HoldDevice(id, true)).await;
     // Let frames already queued at OpenRGB drain before we talk.
     tokio::time::sleep(Duration::from_millis(150)).await;

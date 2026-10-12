@@ -8,6 +8,8 @@ import type {
   AppSettings,
   Blackout,
   Conflict,
+  DeviceSetting,
+  DeviceSettings,
   DeviceGeometry,
   DeviceInfo,
   Effect,
@@ -89,6 +91,7 @@ const devices: MockDevice[] = [
     streamable: true,
     battery: { percent: 64, charging: false },
     onboard: "razer",
+    configurable: true,
     matrix: keyboard.matrix,
     names: keyboard.names,
   },
@@ -107,6 +110,7 @@ const devices: MockDevice[] = [
     streamable: true,
     battery: null,
     onboard: "razer",
+    configurable: true,
     names: Array.from({ length: 19 }, (_, i) => `LED ${i}`),
   },
   {
@@ -127,6 +131,7 @@ const devices: MockDevice[] = [
     streamable: true,
     battery: { percent: 98, charging: false, millivolts: 3897 },
     onboard: null,
+    configurable: true,
     names: ["Scroll wheel", "Logo"],
   },
   {
@@ -144,6 +149,7 @@ const devices: MockDevice[] = [
     streamable: true,
     battery: null,
     onboard: null,
+    configurable: false,
     names: ["LED 0", "LED 1", "LED 2", "LED 3"],
   },
 ];
@@ -586,6 +592,26 @@ let app: AppSettings = {
 };
 let conflicts: Conflict[] = query.has("conflicts") ? [{ id: "razer-synapse", name: "Razer Synapse", brands: "Razer" }] : [];
 const conflictListeners = new Set<(c: Conflict[]) => void>();
+
+// Device settings for the mock keyboard and mouse, shaped like the real readings.
+const deviceSettings = new Map<number, DeviceSetting[]>([
+  [
+    0x1a2b3c01,
+    [
+      { type: "choice", id: "polling_rate", label: "Polling rate", hint: "How often the device reports to the PC.", value: 1000, options: [1000, 500, 125].map((v) => ({ value: v, label: `${v} Hz` })) },
+      { type: "choice", id: "idle_time", label: "Sleep after", hint: "Without input the device turns its radio off to save battery.", value: 900, options: [60, 120, 180, 300, 600, 900].map((v) => ({ value: v, label: `${v / 60} min` })) },
+      { type: "choice", id: "low_battery", label: "Power saving below", hint: "Below this charge the device dims its lighting.", value: 9, options: [5, 9, 10, 15, 20, 25].map((v) => ({ value: v, label: `${v} %` })) },
+    ],
+  ],
+  [
+    0x1a2b3c03,
+    [
+      { type: "choice", id: "polling_rate", label: "Polling rate", hint: "How often the device reports to the PC.", value: 1000, options: [125, 250, 500, 1000].map((v) => ({ value: v, label: `${v} Hz` })) },
+      { type: "dpi_stages", id: "dpi_stages", label: "DPI stages", hint: "The DPI button on the device steps through these.", stages: [400, 800, 1600, 3200], active: 1, min: 50, max: 26000, step: 50, max_stages: 5 },
+    ],
+  ],
+]);
+const settingsOf = (id: number): DeviceSettings => ({ device: id, settings: structuredClone(deviceSettings.get(id) ?? []), persistence: id === 0x1a2b3c03 ? "lumen" : "device" });
 const profiles: Record<string, Scene> = { "Desk default": defaultScene() };
 const snapshotListeners = new Set<(s: Snapshot) => void>();
 const frameListeners = new Set<(f: FramePayload) => void>();
@@ -668,6 +694,22 @@ export const mock: Backend = {
     const d = devices.find((x) => x.id === deviceId);
     if (!d || d.onboard !== "razer") throw new Error("This device has no onboard memory Lumen can write.");
     console.info("[mock] stored on device", d.display_name, effect);
+  },
+  async deviceSettings(deviceId) {
+    await new Promise((r) => setTimeout(r, 300));
+    return settingsOf(deviceId);
+  },
+  async setDeviceSetting(deviceId, change) {
+    await new Promise((r) => setTimeout(r, 300));
+    const list = deviceSettings.get(deviceId) ?? [];
+    for (const s of list) {
+      if (change.type === "choice" && s.type === "choice" && s.id === change.id) s.value = change.value;
+      if (change.type === "dpi_stages" && s.type === "dpi_stages") {
+        s.stages = [...change.stages];
+        s.active = change.active;
+      }
+    }
+    return settingsOf(deviceId);
   },
   async listProfiles() {
     return Object.keys(profiles).sort();

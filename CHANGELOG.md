@@ -35,7 +35,12 @@ updates itself from Settings → Updates.
   Release builds now write a log file (they had none).
 - When OpenRGB runs but finds no devices, the canvas explains the usual causes instead of
   spinning forever.
+- **Device settings**: polling rate, DPI stages, sleep timer and power-saving threshold for
+  Razer devices; polling rate and DPI stages for the HyperX Pulsefire Haste 2 (wired and
+  wireless). Read from the device when you select it, and read back after every change. The
+  Haste 2 forgets them when switched off, so Lumen puts them back.
 - New app icon, replacing the Tauri placeholder (installer, taskbar, tray, Start menu).
+- README screenshots and demo of the current version.
 
 ### Fixed
 

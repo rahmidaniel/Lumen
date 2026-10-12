@@ -61,6 +61,9 @@ pub enum Onboard {
 pub struct DeviceExtras {
     pub battery: Option<Battery>,
     pub onboard: Option<Onboard>,
+    /// A sidecar can read and change device settings (polling rate, DPI, sleep timer, …).
+    #[serde(default)]
+    pub settings: bool,
 }
 
 /// Why every LED is dark right now. While one applies the engine sends black
@@ -135,6 +138,8 @@ pub struct DeviceInfo {
     pub streamable: bool,
     pub battery: Option<Battery>,
     pub onboard: Option<Onboard>,
+    /// Lumen can read and change this device's own settings.
+    pub configurable: bool,
 }
 
 impl DeviceInfo {
@@ -167,6 +172,7 @@ impl DeviceInfo {
             streamable: d.direct_mode_index().is_some(),
             battery: extras.and_then(|e| e.battery),
             onboard,
+            configurable: extras.is_some_and(|e| e.settings),
         }
     }
 }

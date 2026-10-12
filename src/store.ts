@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { frames } from "./lib/frames";
 import { getBackend, type Backend } from "./lib/ipc";
-import type { AppSettings, Conflict, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, PowerSettings, Rgb, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
+import type { AppSettings, Conflict, DeviceSettings, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, PowerSettings, Rgb, Scene, SettingChange, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
 
 export type Tab = "devices" | "layers" | "profiles" | "settings";
 
@@ -61,6 +61,8 @@ interface State {
   setFps(fps: number): void;
   refreshDevices(): Promise<void>;
   saveToDevice(deviceId: number, effect: OnboardEffect): Promise<void>;
+  deviceSettings(deviceId: number): Promise<DeviceSettings>;
+  setDeviceSetting(deviceId: number, change: SettingChange): Promise<DeviceSettings>;
   saveProfile(name: string): Promise<void>;
   loadProfile(name: string): Promise<void>;
   deleteProfile(name: string): Promise<void>;
@@ -278,6 +280,8 @@ export const useStore = create<State>()((set, get) => ({
   async saveToDevice(deviceId, effect) {
     await api().saveToDevice(deviceId, effect);
   },
+  deviceSettings: (deviceId) => api().deviceSettings(deviceId),
+  setDeviceSetting: (deviceId, change) => api().setDeviceSetting(deviceId, change),
   async saveProfile(name) {
     const profiles = await api().saveProfile(name);
     set({ profiles });

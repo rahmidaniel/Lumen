@@ -136,6 +136,23 @@ Strider Chroma 0x3F for everything · DeathStalker V2 Pro / Pro TKL **wireless r
 and the receiver answers with status `Timeout` (4) when the wrong transaction ID is used or the keyboard is asleep.
 Wireless replies take ~5 ms (OpenRazer waits 4900 µs); Lumen polls at 1.2/3.4/5.6/7.8/10 ms before re-sending.
 
+**Device settings** (encodings from OpenRazer `razerchromacommon.c`; which ones a product has is not documented, so
+Lumen reads first and offers only what answers sensibly):
+
+| purpose | class | cmd get / set | size | args |
+|---|---|---|---|---|
+| polling rate | 0x00 | 0x85 / 0x05 | 0x01 | `0x01` 1000 Hz, `0x02` 500 Hz, `0x08` 125 Hz |
+| HyperPolling rate | 0x00 | 0xC0 / 0x40 | 0x02 | `[0x00 or 0x01, 8000 / Hz]` (Synapse sends both) |
+| DPI | 0x04 | 0x85 / 0x05 | 0x07 | `store, x BE, y BE, 0, 0` |
+| DPI stages | 0x04 | 0x86 / 0x06 | 0x26 | `store, active (1-based), count`, then 7-byte records `number, x BE, y BE, 0, 0` |
+| sleep timer | 0x07 | 0x83 / 0x03 | 0x02 | seconds BE, 60–900 |
+| low-battery threshold | 0x07 | 0x81 / 0x01 | 0x01 | raw, `raw × 100 / 255` %, firmware takes 0x0C–0x3F |
+
+Verified 2026-10-12 on the DeathStalker V2 Pro TKL receiver (tid 0x9F): polling rate reads 1000 Hz and accepts 500 and
+back; HyperPolling answers `Unsupported`; both DPI queries answer `Ok` with zeros (a keyboard has no sensor, so zeros
+mean "absent"); sleep timer 900 s → 600 s → 900 s and threshold 0x16 (9 %, the factory value) → 0x26 → 0x16 all stick.
+The Strider Chroma answers none of these sensibly.
+
 **Single reply buffer:** a Razer device holds one response at a time. While OpenRGB streams per-LED frames
 (each frame = several `0x0F/0x03` row reports plus a `0x0F/0x02`, i.e. hundreds of feature reports per
 second at 60 fps) a sidecar query's reply is overwritten before `GetFeature` can read it — the scan in
@@ -165,6 +182,22 @@ are ACKs; `45 xx` reports are unsolicited notifications. While the mouse is awak
 +4 = 25→26 creeping up (looks like a temperature, not a percentage), +6..7 LE = 3896–3910 mV, moving with load (cell
 voltage, probably measured after a diode drop given 98 %). A sleeping mouse (idle ≳ 1–10 min) answers nothing; keep the
 last reading. Lumen shows the voltage next to the percentage so the +2 reading can be sanity-checked over time.
+
+### Polling rate and DPI stages (`crates/lumen-vendor-hyperx/src/config.rs`)
+
+Source: https://github.com/fspy/haste2ctl (wired Haste 2, `03F0:0B97`). `32 02` asks for the table, answered by `33 02 RR MM AA`
+followed by five 5-byte stage records (`u16 LE code, R, G, B`): `RR` is a divisor (`Hz = 8000 / RR`, 0x40 = 125 … 0x01 =
+8000), `MM` the bit mask of enabled stages, `AA` the active stage (0-based), DPI = `(code + 1) × 50`. A write is
+`32 01 00 00` followed by bytes 2–61 of that reply, acknowledged by `ff 01 …` with bytes 14–16 = `32 01 <result>` (0 =
+accepted). Writes change the live profile only.
+
+**Verified on the wireless Haste 2 (`0F98`, through its receiver, 2026-10-12):** the same table answers on `MI_02`
+(`33 02 08 0f 01 07 00 ff 00 00 0f 00 00 00 ff 1f 00 ff ff 00 3f 00 00 ff 00 07 02 ff ff ff …`: 1000 Hz, four stages
+400/800/1600/3200 in red/blue/yellow/green, stage 2 active, a disabled fifth record at 26 000), and a write of 500 Hz with
+three stages was accepted, read back and reverted. The receiver drops a request that arrives while it is relaying
+another, so Lumen sends one vendor request at a time across all devices and asks for the table twice before giving up.
+Because the mouse returns to its own profile when it is switched off, Lumen stores what the user chose
+(`device-settings.json`) and writes it back when a poll finds the mouse on different values.
 
 ## Battery sidecars from published protocols (crates/lumen-vendor-hid)
 

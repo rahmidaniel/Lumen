@@ -1,16 +1,19 @@
 //! Razer devices speak a 90-byte command protocol over HID feature reports.
 //! OpenRGB streams colours through that same channel; this crate only sends the
-//! occasional query (battery, firmware) and the one-off writes OpenRGB has no
-//! API for: storing an effect in the device's flash and switching device mode.
+//! occasional query (battery, firmware) and the writes OpenRGB has no API for:
+//! storing an effect in the device's flash, switching device mode, and device
+//! settings (polling rate, DPI, sleep timer, low-battery threshold).
 //!
 //! Protocol details are documented in `docs/protocols.md`; the command tables
 //! follow OpenRazer's `razerchromacommon.c`.
 
 mod device;
 pub mod protocol;
+pub mod settings;
 
 pub use device::{Battery, RazerDevice, RazerInfo};
 pub use protocol::{Effect, Report, Status, Store};
+pub use settings::{DpiStages, PollingKind};
 
 pub const VENDOR_ID: u16 = 0x1532;
 
@@ -36,6 +39,8 @@ pub enum Error {
     Status(Status),
     #[error("device did not answer")]
     NoReply,
+    #[error("{0}")]
+    Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

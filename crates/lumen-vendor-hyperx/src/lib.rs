@@ -14,10 +14,13 @@ use std::time::{Duration, Instant};
 use hidapi::{HidApi, HidDevice};
 use serde::Serialize;
 
+pub mod config;
+
 pub const VENDOR_ID: u16 = 0x03F0;
 
 pub mod pid {
     pub const PULSEFIRE_HASTE_2_WIRELESS: u16 = 0x0F98;
+    pub const PULSEFIRE_HASTE_2_WIRED: u16 = 0x0B97;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -36,8 +39,10 @@ pub enum Error {
     Hid(#[from] hidapi::HidError),
     #[error("no HyperX device with product ID {0:#06x}")]
     NotFound(u16),
-    #[error("no interface of {0:#06x} answered the battery query (mouse asleep?)")]
+    #[error("no interface of {0:#06x} answered (mouse asleep?)")]
     NoReply(u16),
+    #[error("{0}")]
+    Invalid(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -137,7 +142,7 @@ mod tests {
         assert_eq!(parse_reply(&r), Some(Battery { percent: 98, charging: false, millivolts: Some(3897) }));
         let mut charging = r;
         charging[3] = 0x02;
-        assert_eq!(parse_reply(&charging).unwrap().charging, true);
+        assert!(parse_reply(&charging).unwrap().charging);
         // Implausible voltage word → no voltage.
         let mut no_volts = r;
         no_volts[6] = 0x00;

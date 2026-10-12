@@ -34,7 +34,28 @@ export interface DeviceInfo {
   streamable: boolean;
   battery: Battery | null;
   onboard: Onboard | null;
+  /** Lumen can read and change this device's own settings. */
+  configurable: boolean;
 }
+
+export interface ChoiceOption {
+  value: number;
+  label: string;
+}
+
+/** One adjustable device setting. */
+export type DeviceSetting =
+  | { type: "choice"; id: string; label: string; hint: string; value: number; options: ChoiceOption[] }
+  | { type: "dpi_stages"; id: string; label: string; hint: string; stages: number[]; active: number; min: number; max: number; step: number; max_stages: number };
+
+export interface DeviceSettings {
+  device: number;
+  settings: DeviceSetting[];
+  /** "device": kept by the device; "lumen": Lumen puts them back after the device resets. */
+  persistence: "device" | "lumen";
+}
+
+export type SettingChange = { type: "choice"; id: string; value: number } | { type: "dpi_stages"; stages: number[]; active: number };
 
 /** Built-in effects a device can store as its power-on lighting. */
 export type OnboardEffect =

@@ -174,7 +174,7 @@ impl RazerDevice {
         Ok(String::from_utf8_lossy(&r.args[..end]).trim().to_owned())
     }
 
-    fn power_tid(&self) -> u8 {
+    pub(crate) fn power_tid(&self) -> u8 {
         quirks(self.pid).power.unwrap_or(self.transaction_id)
     }
 

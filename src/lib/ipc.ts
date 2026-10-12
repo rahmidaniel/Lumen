@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings, Conflict, FramePayload, Layer, Layout, OnboardEffect, OpenRgbStatus, PowerSettings, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./types";
+import type { AppSettings, Conflict, DeviceSettings, FramePayload, Layer, Layout, OnboardEffect, OpenRgbStatus, PowerSettings, Scene, SettingChange, Snapshot, UpdateInfo, UpdateProgress } from "./types";
 
 export interface Backend {
   getSnapshot(): Promise<Snapshot>;
@@ -18,6 +18,10 @@ export interface Backend {
   refreshDevices(): Promise<void>;
   /** Store `effect` as the device's power-on lighting. */
   saveToDevice(deviceId: number, effect: OnboardEffect): Promise<void>;
+  /** Read a device's own settings (polling rate, DPI, sleep timer, …). */
+  deviceSettings(deviceId: number): Promise<DeviceSettings>;
+  /** Change one; resolves to what the device reports afterwards. */
+  setDeviceSetting(deviceId: number, change: SettingChange): Promise<DeviceSettings>;
   listProfiles(): Promise<string[]>;
   saveProfile(name: string): Promise<string[]>;
   loadProfile(name: string): Promise<void>;
@@ -74,6 +78,8 @@ const tauriBackend: Backend = {
   setFps: (fps) => invoke("set_fps", { fps }),
   refreshDevices: () => invoke("refresh_devices"),
   saveToDevice: (deviceId, effect) => invoke("save_to_device", { deviceId, effect }),
+  deviceSettings: (deviceId) => invoke<DeviceSettings>("device_settings", { deviceId }),
+  setDeviceSetting: (deviceId, change) => invoke<DeviceSettings>("set_device_setting", { deviceId, change }),
   listProfiles: () => invoke<string[]>("list_profiles"),
   saveProfile: (name) => invoke<string[]>("save_profile", { name }),
   loadProfile: (name) => invoke("load_profile", { name }),
