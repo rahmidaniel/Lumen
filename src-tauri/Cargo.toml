@@ -1,6 +1,6 @@
 [package]
 name = "lumen"
-description = "Lumen — RGB lighting studio built on OpenRGB"
+description = "Lumen — one app for every brand's RGB devices, built on OpenRGB"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

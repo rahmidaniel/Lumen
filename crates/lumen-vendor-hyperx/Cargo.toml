@@ -1,6 +1,6 @@
 [package]
 name = "lumen-vendor-hyperx"
-description = "HyperX HID sidecar: battery state for Pulsefire wireless mice"
+description = "HyperX HID sidecar: battery, polling rate and DPI stages for the Pulsefire Haste 2"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

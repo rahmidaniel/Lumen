@@ -1,6 +1,6 @@
 [package]
 name = "lumen-vendor-razer"
-description = "Razer HID sidecar: battery, device mode, and persisting effects to onboard memory"
+description = "Razer HID sidecar: battery, device settings, device mode, and effects in onboard memory"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

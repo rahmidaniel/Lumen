@@ -4,7 +4,10 @@ All notable changes to Lumen. Installers are on the
 [releases page](https://github.com/rahmidaniel/lumen/releases); from 0.2.1 on, Lumen
 updates itself from Settings → Updates.
 
-## Unreleased
+## 0.3.0 — 2026-10-12
+
+A security fix for *Let Lumen manage OpenRGB*, lights that follow the PC, device settings, and
+the help needed to report problems.
 
 ### Security
 

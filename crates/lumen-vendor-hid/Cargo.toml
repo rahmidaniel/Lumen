@@ -1,6 +1,6 @@
 [package]
 name = "lumen-vendor-hid"
-description = "Read-only HID battery sidecars for Logitech, Glorious, ASUS ROG, SteelSeries and Corsair wireless devices"
+description = "HID sidecars for Logitech, Glorious, ASUS ROG, SteelSeries and Corsair: battery readout, and Logitech mouse settings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
