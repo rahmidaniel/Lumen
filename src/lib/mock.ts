@@ -589,6 +589,7 @@ const status = (): OpenRgbStatus => ({
   mode: "child",
   service: { running: false, disabled: true },
   can_manage: true,
+  task_stale: false,
 });
 const publish = () => snapshotListeners.forEach((l) => l(snapshot()));
 

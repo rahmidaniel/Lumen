@@ -45,6 +45,20 @@ pub fn task_exists() -> bool {
     run("schtasks.exe", &["/Query", "/TN", TASK_NAME]).map(|(code, _)| code == 0).unwrap_or(false)
 }
 
+/// The executable the task runs, from its XML definition.
+pub fn task_command() -> Option<String> {
+    let (code, xml) = run("schtasks.exe", &["/Query", "/TN", TASK_NAME, "/XML"]).ok()?;
+    if code != 0 {
+        return None;
+    }
+    let start = xml.find("<Command>")? + "<Command>".len();
+    let end = xml[start..].find("</Command>")? + start;
+    let raw = xml[start..end].trim();
+    let raw = raw.strip_prefix("\"").unwrap_or(raw);
+    let raw = raw.strip_suffix("\"").unwrap_or(raw);
+    Some(super::plain_path(std::path::Path::new(raw)))
+}
+
 pub fn task_run() -> Result<(), String> {
     match run("schtasks.exe", &["/Run", "/TN", TASK_NAME])? {
         (0, _) => Ok(()),

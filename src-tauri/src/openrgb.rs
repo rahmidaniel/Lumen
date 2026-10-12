@@ -50,6 +50,22 @@ pub struct Status {
     pub service: Option<ServiceInfo>,
     /// Lumen could take OpenRGB over on this machine (Windows, with an executable to run).
     pub can_manage: bool,
+    /// Lumen's task runs a different executable than the one shipped with
+    /// this install (e.g. registered by a development build): re-register it.
+    pub task_stale: bool,
+}
+
+/// A path as a plain string, without Windows' `\\?\` verbatim prefix, so it
+/// can be compared with what other tools report and handed to scripts.
+pub fn plain_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        s.into_owned()
+    }
 }
 
 /// Where an OpenRGB executable comes from.
@@ -146,7 +162,20 @@ impl Manager {
         }
         let Some(pid) = listener_pid(DEFAULT_PORT) else { return };
         let Some(path) = process_path(pid) else { return };
-        let ours = self.candidates.iter().any(|c| matches!(&c.source, Source::Exe(p) if p.to_string_lossy().eq_ignore_ascii_case(&path)));
+        // Ours: one of the executables this Lumen would run, or whatever the
+        // task registered by an earlier install runs.
+        let mut known: Vec<String> = self
+            .candidates
+            .iter()
+            .filter_map(|c| match &c.source {
+                Source::Exe(p) => Some(plain_path(p)),
+                _ => None,
+            })
+            .collect();
+        if self.managed() {
+            known.extend(task_command());
+        }
+        let ours = known.iter().any(|k| k.eq_ignore_ascii_case(&path));
         if ours {
             tracing::info!(pid, %path, "attached to an OpenRGB left running by an earlier Lumen; taking it over");
             *self.orphan.lock().unwrap() = Some(pid);
@@ -173,6 +202,11 @@ impl Manager {
         let service = service_info();
         let managed = self.managed();
         let child = self.child_alive() || self.orphan_alive();
+        let task_stale = managed
+            && match (task_command(), self.task_exe()) {
+                (Some(current), Some((wanted, _))) => !current.eq_ignore_ascii_case(&wanted),
+                _ => false,
+            };
         let mode = if managed {
             "managed"
         } else if child {
@@ -192,6 +226,7 @@ impl Manager {
             mode,
             service,
             can_manage: cfg!(windows) && self.task_exe().is_some(),
+            task_stale,
         }
     }
 
@@ -202,10 +237,10 @@ impl Manager {
     /// The executable Lumen's task runs (or would run): the bundled copy, else any plain executable.
     fn task_exe(&self) -> Option<(String, bool)> {
         let exe = |bundled: bool| {
-            self.candidates
-                .iter()
-                .find(|c| c.bundled == bundled && matches!(c.source, Source::Exe(_)))
-                .map(|c| (c.source.display(), c.bundled))
+            self.candidates.iter().find_map(|c| match &c.source {
+                Source::Exe(p) if c.bundled == bundled => Some((plain_path(p), c.bundled)),
+                _ => None,
+            })
         };
         exe(true).or_else(|| exe(false))
     }
@@ -396,7 +431,7 @@ impl Manager {
 // Platform shims so the manager reads the same on every OS.
 
 #[cfg(windows)]
-use win::{adopt, kill_pid, listener_pid, process_path, release, restart_service, task_end, task_exists, task_run};
+use win::{adopt, kill_pid, listener_pid, process_path, release, restart_service, task_command, task_end, task_exists, task_run};
 #[cfg(windows)]
 fn service_info() -> Option<ServiceInfo> {
     win::service()
@@ -405,6 +440,10 @@ fn service_info() -> Option<ServiceInfo> {
 #[cfg(not(windows))]
 fn task_exists() -> bool {
     false
+}
+#[cfg(not(windows))]
+fn task_command() -> Option<String> {
+    None
 }
 #[cfg(not(windows))]
 fn task_run() -> Result<(), String> {

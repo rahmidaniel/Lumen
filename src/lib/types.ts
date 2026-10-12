@@ -183,6 +183,8 @@ export interface OpenRgbStatus {
   service: { running: boolean; disabled: boolean } | null;
   /** Lumen could take OpenRGB over on this machine. */
   can_manage: boolean;
+  /** Lumen's task runs an executable other than this install's: re-register it. */
+  task_stale: boolean;
 }
 
 export interface UpdateInfo {

@@ -130,6 +130,16 @@ export function SettingsPanel() {
             </div>
           </div>
         )}
+        {openrgb?.mode === "managed" && openrgb.task_stale && (
+          <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 p-2">
+            <span className="text-xs text-warn">The OpenRGB task still points at another copy of OpenRGB (an earlier install or a development build). Re-register it so it runs the copy shipped with this version.</span>
+            <div>
+              <Button size="sm" disabled={openrgbBusy} onClick={() => adoptOpenrgb()}>
+                <ShieldCheck size={14} /> {openrgbBusy ? "Working…" : "Update the OpenRGB task"}
+              </Button>
+            </div>
+          </div>
+        )}
         {openrgb?.mode === "managed" && (
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-faint">Task "LumenOpenRGB" in Task Scheduler; the OpenRGB Windows service stays disabled.</span>
