@@ -34,6 +34,11 @@ import { fileURLToPath } from "node:url";
 const VERSION = "1.0";
 const COMMIT = "81bbe18";
 const RELEASE = `https://codeberg.org/OpenRGB/OpenRGB/releases/download/release_${VERSION}`;
+// Codeberg sometimes refuses automated downloads (every GitHub runner failed on
+// 2026-10-12), so the same files are mirrored as a pre-release of this repo and
+// tried first. The SHA-256 pins below make the source irrelevant for integrity.
+const MIRROR = "https://github.com/rahmidaniel/lumen/releases/download/openrgb-1.0";
+const SOURCES = [MIRROR, RELEASE];
 const SOURCE = `https://codeberg.org/OpenRGB/OpenRGB/src/tag/release_${VERSION}`;
 const LICENSE_URL = `https://codeberg.org/OpenRGB/OpenRGB/raw/tag/release_${VERSION}/LICENSE`;
 
@@ -110,16 +115,29 @@ async function download(name, sha256) {
     console.log(`Using cached ${name}`);
     return cached;
   }
-  const url = `${RELEASE}/${name}`;
-  console.log(`Downloading ${url}`);
-  const res = await fetch(url, { redirect: "follow" });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-  const got = createHash("sha256").update(bytes).digest("hex");
-  if (got !== sha256) throw new Error(`SHA-256 mismatch for ${name}: got ${got}, expected ${sha256}`);
-  writeFileSync(cached, bytes);
-  console.log(`SHA-256 ${got}`);
-  return cached;
+  let lastError = null;
+  for (const base of SOURCES) {
+    const url = `${base}/${name}`;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`Downloading ${url}${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
+        const res = await fetch(url, { redirect: "follow", headers: { "user-agent": "lumen-fetch-openrgb" } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const bytes = Buffer.from(await res.arrayBuffer());
+        const got = createHash("sha256").update(bytes).digest("hex");
+        if (got !== sha256) throw new Error(`SHA-256 mismatch for ${name}: got ${got}, expected ${sha256}`);
+        writeFileSync(cached, bytes);
+        console.log(`SHA-256 ${got}`);
+        return cached;
+      } catch (e) {
+        lastError = e;
+        console.warn(`  ${url}: ${e.message ?? e}`);
+        if (String(e.message ?? e).startsWith("SHA-256 mismatch")) break;
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
+  }
+  throw new Error(`could not download ${name} from any source: ${lastError?.message ?? lastError}`);
 }
 
 /** Run a command, returning its stdout as a Buffer; throws on failure. */
@@ -220,9 +238,24 @@ async function main() {
   // GPL-2.0 text must travel with the binary.
   const licenseCache = join(tmpdir(), "lumen-openrgb", "LICENSE");
   if (!existsSync(licenseCache)) {
-    const res = await fetch(LICENSE_URL, { redirect: "follow" });
-    if (!res.ok) throw new Error(`${LICENSE_URL}: HTTP ${res.status}`);
-    writeFileSync(licenseCache, Buffer.from(await res.arrayBuffer()));
+    let text = null;
+    for (const url of [`${MIRROR}/LICENSE`, LICENSE_URL]) {
+      for (let attempt = 1; attempt <= 3 && text === null; attempt++) {
+        try {
+          const res = await fetch(url, { redirect: "follow", headers: { "user-agent": "lumen-fetch-openrgb" } });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          text = Buffer.from(await res.arrayBuffer());
+        } catch (e) {
+          console.warn(`  ${url}: ${e.message ?? e}`);
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
+      }
+      if (text !== null) break;
+    }
+    if (text === null || !text.toString("utf8", 0, 200).includes("GNU GENERAL PUBLIC LICENSE")) {
+      throw new Error("could not download OpenRGB's LICENSE text from any source");
+    }
+    writeFileSync(licenseCache, text);
   }
   copyFileSync(licenseCache, join(dest, "LICENSE"));
 

@@ -133,7 +133,7 @@ export function SettingsPanel() {
         {openrgb?.mode === "managed" && (
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-faint">Task "LumenOpenRGB" in Task Scheduler; the OpenRGB Windows service stays disabled.</span>
-            <Button size="sm" variant="ghost" disabled={openrgbBusy} onClick={() => releaseOpenrgb()}>
+            <Button size="sm" variant="ghost" className="shrink-0 whitespace-nowrap" disabled={openrgbBusy} onClick={() => releaseOpenrgb()}>
               Hand back to the service
             </Button>
           </div>

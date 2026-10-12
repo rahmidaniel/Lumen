@@ -11,6 +11,28 @@ See [`docs/PLAN.md`](docs/PLAN.md) for architecture and milestones, and
 
 Stack: Tauri 2 · Rust · React 19 · TypeScript · Tailwind.
 
+## Screenshots
+
+**Devices home.** Every device OpenRGB reports, drawn to scale on one desk: the keyboard
+on its real ANSI/ISO layout, the mat as an edge-lit loop, the mouse, the graphics card.
+Battery gauges (with cell voltage where the mouse reports it) sit next to the devices that
+have one, and selecting a Razer device offers its onboard boot lighting.
+
+![Devices home: keyboard, mat, mouse and GPU on the canvas, battery gauges in the panel](docs/screenshots/devices.png)
+
+**Effects.** A layer stack: static colours, gradients, spectrum cycles, waves, breathing
+and starlight, each with opacity, blend mode and the devices it applies to. One wave
+travels across the mat, keyboard, mouse and GPU as a single motion.
+
+![Effects panel with a spectrum-cycle layer running across all devices](docs/screenshots/effects.png)
+
+**Paint keys.** A paint layer colours individual keys and LEDs: click or drag across the
+canvas, Shift to erase. Keys you leave alone keep showing the layers below.
+
+![Paint mode: a few keys painted white on top of the running effect](docs/screenshots/paint.png)
+
+Captured from the Windows build with `scripts/screenshots.ps1`.
+
 ## Installing
 
 Grab the installer for your platform from the
