@@ -2033,6 +2033,7 @@ version = "0.1.0"
 dependencies = [
  "hidapi",
  "lumen-core",
+ "lumen-vendor-hid",
  "lumen-vendor-hyperx",
  "lumen-vendor-razer",
  "openrgb-sdk",
@@ -2059,6 +2060,16 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "lumen-vendor-hid"
+version = "0.1.0"
+dependencies = [
+ "hidapi",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

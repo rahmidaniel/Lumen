@@ -63,6 +63,7 @@ crates/openrgb-sdk          OpenRGB SDK protocol v6 client
 crates/lumen-core           canvas, effect layers, renderer, profiles, engine
 crates/lumen-vendor-razer   Razer HID sidecar: battery, onboard (boot) effects
 crates/lumen-vendor-hyperx  HyperX HID sidecar: battery
+crates/lumen-vendor-hid     Logitech, Glorious, ASUS ROG, SteelSeries, Corsair sidecars: battery (from published protocols, untested on hardware)
 src-tauri                   Tauri shell: commands, events, tray, OpenRGB process management
 src                         React UI
 scripts                     fetch-openrgb.mjs (bundling), setup-windows.ps1, measure-footprint.ps1

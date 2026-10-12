@@ -165,3 +165,88 @@ are ACKs; `45 xx` reports are unsolicited notifications. While the mouse is awak
 +4 = 25→26 creeping up (looks like a temperature, not a percentage), +6..7 LE = 3896–3910 mV, moving with load (cell
 voltage, probably measured after a diode drop given 98 %). A sleeping mouse (idle ≳ 1–10 min) answers nothing; keep the
 last reading. Lumen shows the voltage next to the percentage so the +2 reading can be sanity-checked over time.
+
+## Battery sidecars from published protocols (crates/lumen-vendor-hid)
+
+None of the devices below were available while writing this (2026-10-12); the implementations follow the cited
+open-source tools byte for byte, validate every reply strictly, and report "asleep" rather than guess. All queries are
+read-only. The sidecar stops polling a device once its vendor module reports that it has no battery feature.
+
+### Logitech HID++ 2.0 (046D)
+
+Sources: Solaar `lib/logitech_receiver/{base,hidpp20,hidpp20_constants,hidpp10_constants}.py`, Linux
+`drivers/hid/hid-logitech-hidpp.c`, libratbag `src/hidpp20.c`, cvuchener/hidpp `hidpp/Dispatcher.cpp`, OpenRGB
+`LogitechProtocolCommon.cpp`.
+
+Long report `11 <index> <feature> <fn<<4 | sw id> <16 params>`; index `FF` for a cable device (Bluetooth answers with `00`),
+1–7 for receiver slots (Lightspeed C539/C53A/C53D/C53F/C541/C543/C545/C547/C54D, Unifying C52B/C532/C534). Replies repeat
+bytes 2–3 and the software id (Lumen uses 0x0C; kernel 1, OpenRGB 7, libratbag 8, Solaar 0xB). Errors: byte 2 `FF`
+(HID++ 2.0: 0x08 busy, 0x06/0x07/0x09 unsupported) or `8F` (HID++ 1.0, sent by receivers: 0x08 nothing paired, 0x09 resource
+error = asleep/out of range, 0x07 busy, 0x01 = HID++ 1.0 device), code in byte 5. Windows splits the short (0x10, usage 1)
+and long (0x11, usage 2) collections of page 0xFF00 (page 0xFF43 keeps the flag in the usage's low byte) into separate HID
+nodes; Lumen writes long frames to the long node and reads every HID++ node, since receivers answer errors on the short one.
+IRoot: ping `00 1S 00 00 5A` (fn 1, echo of 0x5A), getFeature `00 0S <id hi> <id lo>` → feature index (0 = absent).
+0x1004 UNIFIED_BATTERY getCapabilities (fn 0: byte +1 bit 1 = state-of-charge supported) and getStatus (fn 1: +0 percent,
++1 level bits 1/2/4/8 critical/low/good/full, +2 charging status 0 none, 1 charging, 2 slow, 3 full, 4 error, +3 external
+power). 0x1000 BATTERY_STATUS fn 0: +0 level %, +1 next level, +2 status (0 discharging, 1/2/4 charging, 3 full; level is 0
+while charging). 0x1001 BATTERY_VOLTAGE fn 0: +0..1 mV big-endian, +2 flags (bit 7 external power; bits 0–2 charge status
+0 charging / 1 full / 2 stopped / 7 error, valid only with bit 7; bit 3 fast, bit 4 slow); percent from Solaar's 13-point
+discharge curve (4186 mV = 100 % … 3500 mV = 0 %).
+
+### Glorious CORE v1 wireless mice (258A)
+
+Sources: korkje/mxw `src/report/battery.rs`, dkbednarczyk/mxw `src/util/status.rs`, AwesomeTy18/GloriousBatteryMonitor
+`Mice/MouseV2ProBatteryChecker.cs`, OpenMouse `src/glorious-classic/index.ts`.
+
+Cable / dongle PIDs: Model O Wireless 2011/2022, O- 2013/2024, D 2012/2023, D- 2014/2025, O Pro 2015/2027, Series One Pro
+2018/2031, O 2 PRO 2019/2033, D 2 PRO 201A/2034, Series 2 PRO 201D/2039, O 2 PRO 4K/8K 201B/2035, D 2 PRO 4K/8K 201C/2036.
+Interface 2, vendor collection usage page 0xFF01 (0xFF00 older firmware, 0xFFFF on the 4K/8K PRO). Unnumbered 64-byte
+**feature** report `00 00 02 02 00 83` (+2 target mouse, +3 length, +4 bank 0, +5 register 0x83 = battery; 0x81 = firmware);
+wait ~60 ms; `GetFeature` the reply: +1 status (`A1` awake, `A4` asleep, `A0` waking, `A2` failed), +6 must echo `83`
+(else stale), +7 charging flag, +8 percent (tools show 0 as 1 %). The dongle answers with `A4`/`A0` while the mouse is off.
+The Pixart "Model x 2 Wireless" family (093A:821A…826D) cannot be queried: it pushes `06 FB <percent> <toggle>` input
+reports on interface 1 every 20–40 s over the dongle only, and the "charging" toggle is meaningless — not implemented.
+
+### ASUS ROG wireless mice (0B05)
+
+Sources: seerge/g-helper `app/Peripherals/Mouse/AsusMouse.cs` (`GetBatteryReportPacket`, `ParseBattery`,
+`ParseChargingState`, `IsMouseError`), Humblemonk/rogctl `src/protocol.rs` (captured vector), OpenMouse `src/asus/`.
+
+Cable / dongle PIDs: Keris Wireless 195E/1960 (level 0–4 ×25), Keris Wireless AimPoint 1A66/1A68, Gladius III Wireless
+197D/197F, Gladius III AimPoint 1A70/1A72, Chakram 18E3/18E5 (level ×25), Chakram X 1A18/1A1A, Spatha X 1977/1979, Harpe Ace
+Aim Lab 1A92/1A94 (all others percent). Interface 0, usage page 0xFF01, unnumbered 64-byte reports. Request `12 07 00 …`.
+Drain queued input first (`12 01` button bitmaps share the collection), then read until a report echoes `12 07`: +4 battery,
++5 auto power-off, +6 low-battery warning, +7..8 LE millivolts (one tool; unverified), +9 charging ≠ 0 — offsets without the
+report-ID byte. `FF AA` = request rejected (asleep / out of range); all zeros = empty packet (mouse off behind the dongle);
+0 % and not charging = dongle answering for an absent mouse. The ROG Omni (1ACE) and SpeedNova (1AD0) receivers use report
+ID 3, shifting everything by one byte; the parser accepts that framing but those receivers are not in the product list yet.
+Captured (rogctl, Harpe II Ace on SpeedNova): `03 12 07 00 00 50 02 14 d8 0f 00 00 01` → 80 %, 4056 mV, not charging.
+
+### SteelSeries wireless mice (1038)
+
+Source: flozz/rivalcfg `rivalcfg/devices/*.py` (`battery_level` commands), `rivalcfg/mouse.py` `Mouse.battery`,
+`rivalcfg/usbhid.py`; a third-party Aerox 3 Wireless capture for the echo bytes.
+
+Aerox 3/5/9 Wireless (183A/1838, 187A/1878, 1854/1852, 185E/185C, 1862/1860, 185A/1858, 1876/1874) and Prime (Mini)
+Wireless (1842/1840, 184A/1848), cable/dongle: interface 3 (usage page 0xFFC0), output report `92` on the cable PID,
+`D2` (= `92 | 0x40`) on the dongle. Reply +1: bit 7 charging, `((b & 0x7F) − 1) × 5` percent; `FF` = mouse off/asleep (the
+dongle answers `40 FF`). Observed echo byte `12` for the cable query. rivalcfg issue #250: the query "only works sometimes"
+on Windows, so Lumen retries three times. Rival 3 Wireless 1830 / Gen 2 1872 (interface 3) and Rival 650 172B/1726
+(interface 0): output report `AA 01`; reply +0 percent, +2 charging; the Rival 650 dongle is silent while the mouse is off.
+
+### Corsair wireless mice and keyboards (1B1C)
+
+Sources: ckb-next `src/daemon/device.c` (`nxp_get_battery_info`), `device_bragi.c` (`bragi_get_battery_info`),
+`bragi_common.c`, `bragi_proto.h`, `nxp_proto.h`, `usb.h` (model tables); OpenRGB `CorsairPeripheralV2Controller`
+(interface/usage page, retry-on-zero) and `CorsairPeripheralController` (feature-report fallback).
+
+Bragi ("V2", interface 1, usage page 0xFF42): Dark Core RGB Pro 1B80/1B81, Pro SE 1B7E/1B7F, Ironclaw RGB Wireless
+1B4C/1B66, Harpoon RGB Wireless 1B5E/1B65, K57 RGB Wireless 1B6E/1B62, Slipstream receiver 1BA6. Property read
+`(08 | id) 02 <property>`, id 0 on the cable, 9 (child 1) through a receiver; reply `(08 | id) 02 <error> <value LE24>`.
+0x0F = battery level in 0.1 % (÷10), 0x10 = status (1 charging, 2 discharging, 3 full). A receiver answers 0 while its
+device sleeps; OpenRGB polls up to 8× / 120 ms before believing it.
+NXP (legacy, interface 1, usage page 0xFFC2): Dark Core RGB 1B35/1B64, K63 Wireless 1B45/1B8C/1B50/1B8F. Request `0E 50`;
+reply echoes `0E 50`, +4 level index 0–4 → {0, 15, 30, 50, 100} %, +5 status (1 discharging, 2 charging, 3 full). Firmware
+before 1.20 answers only on the feature-report path (same bytes via `SetFeature`/`GetFeature`, payload at +1).
+Dark Core RGB SE 1B4B/1B51 is Bragi in OpenRGB and NXP in ckb-next; Lumen tries both. K100 AIR, Katar Pro Wireless and
+Sabre RGB Pro Wireless have no published PIDs or protocol and are not handled.

@@ -384,11 +384,16 @@ function drawScene(
     ctx.restore();
   }
 
-  // Pass 2: glow, additive.
+  // Pass 2: glow, additive. Keycaps reach the edge of the case, so their glow
+  // is clipped to it; edge-lit mats and mice are meant to spill light outward.
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
   for (const { p, g, rgb } of placed) {
     enterDevice(ctx, t, p);
+    if (g.body.type === "keyboard") {
+      roundRectPath(ctx, 0, 0, g.width, g.height, g.body.radius);
+      ctx.clip();
+    }
     for (const led of g.leds) {
       const c = colorOf(rgb, led);
       if (c) drawGlowGlyph(ctx, led, c);

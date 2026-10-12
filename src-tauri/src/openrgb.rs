@@ -8,6 +8,7 @@
 //!    Windows `openrgb/OpenRGB.exe`, Linux `openrgb/OpenRGB.AppImage`,
 //!    macOS `openrgb/OpenRGB.zip` (unpacked once into Lumen's data directory);
 //! 3. a system-wide install found on disk.
+//!
 //! Candidates are tried in that order until a server comes up. A copy Lumen
 //! started is stopped again when Lumen exits.
 

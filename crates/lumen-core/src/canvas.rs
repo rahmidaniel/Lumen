@@ -52,8 +52,8 @@ impl Layout {
         let mut per_kind: BTreeMap<i32, usize> = BTreeMap::new();
         for d in devices {
             let ordinal = per_kind.entry(d.kind.0).or_insert(0);
-            if !self.placements.contains_key(&d.id) {
-                self.placements.insert(d.id, default_placement(d.kind, *ordinal));
+            if let std::collections::btree_map::Entry::Vacant(slot) = self.placements.entry(d.id) {
+                slot.insert(default_placement(d.kind, *ordinal));
                 added = true;
             }
             *ordinal += 1;
@@ -412,6 +412,7 @@ fn line_glyphs(zone: usize, offset: usize, count: usize, w: f32, h: f32, y: f32,
 /// Graphics card lighting: a segmented light bar along the top edge (the edge
 /// that faces the side panel), right of centre where logos sit. A second zone
 /// gets the bottom edge; further ones fall back to a row across the card.
+#[allow(clippy::too_many_arguments)]
 fn gpu_bar_glyphs(zone: usize, offset: usize, count: usize, w: f32, h: f32, bracket: f32, rank: usize, out: &mut Vec<LedGlyph>) {
     if rank >= 2 {
         return line_glyphs(zone, offset, count, w, h, h * 0.5, out);
