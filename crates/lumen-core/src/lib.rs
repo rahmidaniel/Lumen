@@ -16,7 +16,7 @@ pub mod scene;
 
 pub use canvas::{Body, DeviceGeometry, Glyph, LedGlyph, LedPoint, Layout, Placement};
 pub use effects::{Effect, Palette, Rgb, Rgba, Stop};
-pub use engine::{Battery, DeviceExtras, DeviceInfo, EngineConfig, EngineHandle, FrameSet, Onboard, Snapshot, ZoneInfo};
+pub use engine::{Battery, Blackout, DeviceExtras, DeviceInfo, EngineConfig, EngineHandle, FrameSet, Onboard, Snapshot, ZoneInfo};
 pub use profile::{Profile, ProfileStore};
 pub use render::Renderer;
 pub use scene::{BlendMode, Layer, Mask, Scene, ZoneRef};

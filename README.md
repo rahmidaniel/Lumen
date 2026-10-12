@@ -35,10 +35,17 @@ together, and one place to see battery levels and manage devices.
   as one motion, in the spirit of Razer Chroma Studio, but for every brand at once.
 - **Per-key painting.** A paint layer colours individual keys and LEDs on top of any effect.
 - **Battery at a glance.** Wireless mice and keyboards show their charge on the Devices home,
-  in the top bar and in the tray tooltip.
+  in the top bar and in the tray tooltip, and you get a notification at 20 % and 5 %.
+- **Lights that follow your PC.** Everything goes dark when the PC sleeps, shuts down or
+  turns its screen off, and, if you like, when it locks or sits idle; it comes back when
+  you do. A lights switch sits in the top bar, the tray and an optional shortcut. (Windows
+  for now.)
 - **Boot lighting.** Where the hardware has onboard memory (Razer so far), Lumen writes the
   effect the device shows before any software has started.
-- **Profiles** for saving and switching whole scenes.
+- **Profiles** for saving and switching whole scenes, from the app, the tray menu or the
+  keyboard.
+- **Knows when another app is in the way.** If Synapse, G HUB, iCUE, Armoury Crate or
+  another lighting app is running, Lumen says so and how to get it out of the way.
 - **Light footprint.** Lives in the tray; closing the window frees the UI entirely while
   lighting keeps running, at about 30 MB of memory and 2 % of one CPU core. Starts with
   your OS if you want it to.
@@ -135,7 +142,8 @@ flicker between both.
 <summary><b>A device doesn't show up</b></summary>
 
 1. Check that OpenRGB supports it: [device list](https://openrgb.org/devices.html).
-2. Quit the vendor app; some hold on to the device while they run.
+2. Quit the vendor app; some hold on to the device while they run. Lumen shows a warning
+   in the top bar when it sees one running.
 3. Graphics cards, motherboards and RAM need administrator access. On Windows, use
    Settings → OpenRGB → *Let Lumen manage OpenRGB* (one admin prompt). On Linux, check
    the udev rules (see [Install](#install)); on macOS, the *Input Monitoring* permission.
@@ -149,12 +157,27 @@ or behaves wrong in Lumen, [open an issue here](https://github.com/rahmidaniel/l
 <details>
 <summary><b>Why does "Let Lumen manage OpenRGB" ask for administrator rights?</b></summary>
 
-OpenRGB's own Windows installer runs it as a system service, which Lumen can't start,
-stop or restart without an admin prompt each time, and which keeps running after Lumen
-quits. Managing it asks once: it disables that service and registers a scheduled task
-that runs Lumen's bundled OpenRGB with the elevation it needs for graphics cards and
-motherboards. From then on Lumen starts and stops it with Lumen, without prompts. *Hand
-back to the service* undoes it. Details: [docs/openrgb.md](docs/openrgb.md).
+Motherboard and RAM lighting only work when OpenRGB runs with administrator rights, and
+OpenRGB's own Windows installer runs it as a service that Lumen can't control and that
+keeps running after Lumen quits. Managing it asks once: it copies Lumen's OpenRGB to
+`Program Files` (where only administrators can change it), installs a small service that
+runs it, and disables OpenRGB's own service. From then on Lumen starts and stops OpenRGB
+with itself, without prompts. *Stop managing* (or *Hand back to the service*) undoes it.
+Details: [docs/openrgb.md](docs/openrgb.md).
+
+If you used Lumen 0.2's version of this (a scheduled task), Lumen shows **Security fix
+needed**: that task let other programs on the PC get administrator rights. One click in
+Settings → OpenRGB switches to the service and removes it.
+</details>
+
+<details>
+<summary><b>How do I report a problem?</b></summary>
+
+Settings → Help → *Copy diagnostics* puts your Lumen and OpenRGB versions, setup, devices
+and recent logs (no serial numbers) on the clipboard; paste it into a
+[bug report](https://github.com/rahmidaniel/lumen/issues/new?template=bug_report.yml).
+Lumen's logs live in `%LOCALAPPDATA%\dev.lumen.studio\logs` on Windows (*Open log folder*
+in the same place).
 </details>
 
 <details>

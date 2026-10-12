@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { frames } from "./lib/frames";
 import { getBackend, type Backend } from "./lib/ipc";
-import type { AppSettings, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, Rgb, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
+import type { AppSettings, Conflict, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, PowerSettings, Rgb, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
 
 export type Tab = "devices" | "layers" | "profiles" | "settings";
 
@@ -23,6 +23,8 @@ interface State {
   app: AppSettings | null;
   update: UpdateUi;
   profiles: string[];
+  /** Vendor lighting apps running alongside Lumen (not dismissed). */
+  conflicts: Conflict[];
   tab: Tab;
   selectedLayer: string | null;
   selectedDevice: number | null;
@@ -48,6 +50,14 @@ interface State {
   paintLeds(layerId: string, device: number, leds: number[], color: Rgb | null): void;
   setBrightness(brightness: number): void;
   setPaused(paused: boolean): void;
+  setLightsOff(off: boolean): void;
+  setPowerSettings(power: PowerSettings): void;
+  setBatteryAlerts(enabled: boolean): void;
+  /** Resolves to an error message when the shortcuts could not be registered. */
+  setShortcuts(enabled: boolean): Promise<string | null>;
+  dismissConflict(id: string): Promise<void>;
+  diagnostics(): Promise<string>;
+  openLogFolder(): Promise<void>;
   setFps(fps: number): void;
   refreshDevices(): Promise<void>;
   saveToDevice(deviceId: number, effect: OnboardEffect): Promise<void>;
@@ -101,6 +111,7 @@ export const useStore = create<State>()((set, get) => ({
   app: null,
   update: NO_UPDATE,
   profiles: [],
+  conflicts: [],
   tab: "devices",
   selectedLayer: null,
   selectedDevice: null,
@@ -121,6 +132,7 @@ export const useStore = create<State>()((set, get) => ({
     });
     backend.onFrame((f) => frames.push(f));
     backend.onOpenrgbStatus((openrgb) => set({ openrgb }));
+    backend.onConflicts((conflicts) => set({ conflicts }));
     backend.onUpdateAvailable((info) => set({ update: { phase: "available", info, progress: null, error: null } }));
     backend.onUpdateProgress((progress) =>
       set((s) => ({
@@ -131,11 +143,12 @@ export const useStore = create<State>()((set, get) => ({
         },
       })),
     );
-    const [snapshot, openrgb, profiles, app] = await Promise.all([
+    const [snapshot, openrgb, profiles, app, conflicts] = await Promise.all([
       backend.getSnapshot(),
       backend.openrgbStatus().catch(() => null),
       backend.listProfiles().catch(() => [] as string[]),
       backend.appSettings().catch(() => null),
+      backend.getConflicts().catch(() => [] as Conflict[]),
     ]);
     set({
       ready: true,
@@ -143,6 +156,7 @@ export const useStore = create<State>()((set, get) => ({
       openrgb,
       profiles,
       app,
+      conflicts,
       update: app?.update ? { phase: "available", info: app.update, progress: null, error: null } : NO_UPDATE,
       selectedLayer: snapshot.scene.layers.at(-1)?.id ?? null,
     });
@@ -219,6 +233,40 @@ export const useStore = create<State>()((set, get) => ({
   setPaused(paused) {
     set((s) => (s.snapshot ? { snapshot: { ...s.snapshot, paused } } : {}));
     api().setPaused(paused).catch(fail(set));
+  },
+  setLightsOff(off) {
+    set((s) => ({
+      snapshot: s.snapshot ? { ...s.snapshot, blackout: off ? "user" : s.snapshot.blackout === "user" ? null : s.snapshot.blackout } : null,
+      app: s.app ? { ...s.app, lights_off: off } : s.app,
+    }));
+    api().setLightsOff(off).catch(fail(set));
+  },
+  setPowerSettings(power) {
+    set((s) => ({ app: s.app ? { ...s.app, power } : s.app }));
+    api().setPowerSettings(power).catch(fail(set));
+  },
+  setBatteryAlerts(enabled) {
+    set((s) => ({ app: s.app ? { ...s.app, battery_alerts: enabled } : s.app }));
+    api().setBatteryAlerts(enabled).catch(fail(set));
+  },
+  async setShortcuts(enabled) {
+    try {
+      await api().setShortcuts(enabled);
+      set((s) => ({ app: s.app ? { ...s.app, shortcuts: enabled } : s.app }));
+      return null;
+    } catch (e) {
+      set((s) => ({ app: s.app ? { ...s.app, shortcuts: false } : s.app }));
+      return e instanceof Error ? e.message : String(e);
+    }
+  },
+  async dismissConflict(id) {
+    set((s) => ({ conflicts: s.conflicts.filter((c) => c.id !== id) }));
+    const conflicts = await api().dismissConflict(id).catch(() => null);
+    if (conflicts) set({ conflicts });
+  },
+  diagnostics: () => api().diagnostics(),
+  async openLogFolder() {
+    await api().openLogFolder().catch(fail(set));
   },
   setFps(fps) {
     set((s) => (s.snapshot ? { snapshot: { ...s.snapshot, fps } } : {}));

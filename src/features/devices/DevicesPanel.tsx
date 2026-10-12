@@ -1,5 +1,6 @@
 import { BatteryCharging, Cpu, Fan, Gamepad2, Headphones, HardDriveDownload, Keyboard, Lightbulb, MemoryStick, Monitor, Mouse, RefreshCw, Square } from "lucide-react";
 import { useState } from "react";
+import { ConflictBanner } from "../../components/ConflictBanner";
 import { Badge, Button, ColorInput, Field, IconButton, Panel, Select, cx } from "../../components/ui";
 import type { Battery, DeviceInfo, OnboardEffect, Rgb } from "../../lib/types";
 import { useStore } from "../../store";
@@ -172,7 +173,14 @@ export function DevicesPanel() {
         </IconButton>
       }
     >
-      {devices.length === 0 && <p className="text-sm text-muted">No devices yet. OpenRGB reports them here once it is running.</p>}
+      <ConflictBanner />
+      {devices.length === 0 && (
+        <p className="text-sm text-muted">
+          {snapshot?.connected && !snapshot.detecting
+            ? "OpenRGB is running but reports no devices. The canvas lists what usually causes that."
+            : "No devices yet. OpenRGB reports them here once it is running."}
+        </p>
+      )}
       <div className="flex flex-col gap-2">
         {devices.map((d) => (
           <DeviceCard key={d.id} device={d} active={d.id === selected} onSelect={() => selectDevice(d.id === selected ? null : d.id)} />

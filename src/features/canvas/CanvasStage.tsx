@@ -9,6 +9,7 @@ import { IconButton } from "../../components/ui";
 import { frames } from "../../lib/frames";
 import type { DeviceGeometry, DeviceInfo, FramePayload, LedGlyph, Placement } from "../../lib/types";
 import { useStore } from "../../store";
+import { LightsOffNotice, NoDevicesHelp } from "./CanvasNotices";
 
 const PAD = 56;
 const NO_PLACEMENTS: Record<string, Placement> = {};
@@ -737,12 +738,22 @@ export function CanvasStage() {
 
       {empty && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
-          <p className="text-sm text-muted">
-            {problem ?? (openrgb && !openrgb.exe ? "OpenRGB isn't installed. Install it, then press Start OpenRGB in Settings." : "Waiting for OpenRGB to report your devices…")}
-          </p>
+          {snapshot?.connected && !snapshot.detecting ? (
+            <NoDevicesHelp />
+          ) : (
+            <>
+              <div className="h-10 w-10 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
+              <p className="text-sm text-muted">
+                {snapshot?.connected
+                  ? "Looking for your devices…"
+                  : (problem ?? (openrgb && !openrgb.exe ? "OpenRGB isn't installed. Install it, then press Start OpenRGB in Settings." : "Waiting for OpenRGB to report your devices…"))}
+              </p>
+            </>
+          )}
         </div>
       )}
+
+      {snapshot?.blackout && !empty && <LightsOffNotice reason={snapshot.blackout} />}
 
       {paintLayer && !empty && (
         <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-lg border border-accent/40 bg-surface/90 px-3 py-1.5 text-xs backdrop-blur">

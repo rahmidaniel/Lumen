@@ -38,18 +38,44 @@ quits. If an earlier Lumen was killed and left its OpenRGB running, the next Lum
 recognises the executable and takes the process over. On macOS and Linux the bundled
 copy is simply a child process.
 
+If OpenRGB goes away while it is Lumen's job to run it (it crashed, or someone ended
+it), Lumen starts it again after five seconds, at most every thirty.
+
 ## Managed mode on Windows
 
-On Windows the OpenRGB installer's service gets in the way: it runs as SYSTEM outside
-Lumen's control (it needs that elevation for I2C devices such as graphics cards and
-motherboards), it outlives Lumen, and it can wedge. Settings → OpenRGB → *Let Lumen
-manage OpenRGB* fixes that with a single admin prompt
-(`src-tauri/packaging/windows/openrgb-adopt.ps1`): the service is stopped and disabled,
-and a Task Scheduler task `LumenOpenRGB` that runs the bundled OpenRGB with highest
-privileges is registered for your account. From then on Lumen starts, restarts and stops
-that task without prompts, and OpenRGB keeps its elevated device access.
+SMBus devices (motherboard and RAM lighting) need OpenRGB to run with administrator
+rights, and the OpenRGB installer's own service gets in the way of everything else: it
+runs outside Lumen's control, outlives Lumen, and can wedge. Settings → OpenRGB → *Let
+Lumen manage OpenRGB* replaces it with a single admin prompt
+(`src-tauri/packaging/windows/openrgb-adopt.ps1`):
 
-If the task still points at another copy of OpenRGB (an earlier install or a development
-build), Settings says so and offers *Update the OpenRGB task*. *Hand back to the service*
-(`openrgb-release.ps1`) undoes the whole thing. Until you opt in, Lumen attaches to the
-service and can only restart it through an admin prompt.
+1. OpenRGB's own service, if installed, is stopped and disabled.
+2. Lumen's bundled OpenRGB is copied to `C:\Program Files\Lumen\OpenRGB`, where only
+   administrators can change it.
+3. A Windows service `LumenOpenRGB` runs that copy as LocalSystem, started on demand.
+   Its permissions let interactive users start and stop it, so a normal-user Lumen
+   starts it with itself, restarts it when it stops answering and stops it on exit,
+   without further prompts. Windows restarts it if it crashes.
+
+In service mode OpenRGB keeps its settings in `service_config\` next to the executable;
+the adopt step pins its SDK server to `127.0.0.1` there. If OpenRGB ignores a stop
+request (it has been seen wedging in `STOP_PENDING`), a restart from Settings ends it
+through one admin prompt.
+
+If the service runs a different OpenRGB than the one shipped with this Lumen (an
+earlier install, or a development build), Settings says so and offers *Update Lumen's
+OpenRGB service*. *Hand back to the service* / *Stop managing* (`openrgb-release.ps1`)
+removes the service and its folder and re-enables OpenRGB's own service if there is one.
+
+Every elevated step runs as one PowerShell whose script travels inside its own command
+line (`-EncodedCommand`), so nothing in a user-writable folder can be swapped between
+Lumen writing it and the elevated shell running it.
+
+### Lumen 0.2's scheduled task
+
+Lumen 0.2 used a Task Scheduler task (`LumenOpenRGB`) instead of the service. It ran
+OpenRGB with highest privileges straight from the per-user install folder, and loaded
+OpenRGB plugins from the user's profile, so any program running as the user could swap
+a file there and get administrator rights without a prompt. Lumen still recognises and
+uses that task, but flags it as a security fix in the top bar and in Settings; switching
+to the service removes it.

@@ -178,5 +178,9 @@ try {
 } finally {
   browser.kill();
   await sleep(500);
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  try {
+    rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+  } catch {
+    // Edge can hold its profile a little longer; it is only a temp folder.
+  }
 }

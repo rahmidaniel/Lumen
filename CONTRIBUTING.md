@@ -55,8 +55,14 @@ the AppImage, on macOS the unpacked `OpenRGB.app/Contents/MacOS/OpenRGB`).
 
 No RGB hardware needed for UI work: `npm run dev` serves the real UI against
 `src/lib/mock.ts`, which fakes a keyboard, mat, mouse and graphics card and renders the
-layer stack with the same maths as the Rust engine. `?layout=iso` shows the keyboard on
-an ISO layout.
+layer stack with the same maths as the Rust engine. URL switches show the less common
+states: `?layout=iso` (ISO keyboard), `?nodevices` (the empty states), `?conflicts` (the
+vendor-app warning) and `?legacy` (the Lumen 0.2 task warning).
+
+Lumen logs to `%LOCALAPPDATA%\dev.lumen.studio\logs` (Windows), `~/Library/Logs/dev.lumen.studio`
+(macOS) or `~/.local/share/dev.lumen.studio/logs` (Linux), one file a day for a week;
+`RUST_LOG` changes the level. Settings → Help → *Copy diagnostics* bundles the essentials
+for an issue.
 
 ### Layout
 

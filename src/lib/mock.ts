@@ -5,6 +5,9 @@
 import type { Backend } from "./ipc";
 import { hsv } from "./color";
 import type {
+  AppSettings,
+  Blackout,
+  Conflict,
   DeviceGeometry,
   DeviceInfo,
   Effect,
@@ -560,10 +563,29 @@ const defaultScene = (): Scene => ({
   brightness: 1,
 });
 
+// `?nodevices` shows the empty states, `?conflicts` a vendor-app warning,
+// `?legacy` the warning about Lumen 0.2's scheduled task.
+const query = new URLSearchParams(typeof location === "undefined" ? "" : location.search);
+const noDevices = query.has("nodevices");
+
 let scene = defaultScene();
 let built = buildScene(scene.layout);
 let paused = false;
+let blackout: Blackout | null = null;
 let fps = 60;
+let app: AppSettings = {
+  version: "0.3.0",
+  auto_update: true,
+  update: null,
+  lights_off: false,
+  power: { sleep: true, display_off: true, lock: false, idle_minutes: 0 },
+  power_supported: true,
+  battery_alerts: true,
+  shortcuts: false,
+  log_dir: "C:\\Users\\you\\AppData\\Local\\dev.lumen.studio\\logs (mock)",
+};
+let conflicts: Conflict[] = query.has("conflicts") ? [{ id: "razer-synapse", name: "Razer Synapse", brands: "Razer" }] : [];
+const conflictListeners = new Set<(c: Conflict[]) => void>();
 const profiles: Record<string, Scene> = { "Desk default": defaultScene() };
 const snapshotListeners = new Set<(s: Snapshot) => void>();
 const frameListeners = new Set<(f: FramePayload) => void>();
@@ -575,10 +597,12 @@ const snapshot = (): Snapshot => ({
   connected: true,
   problem: null,
   paused,
+  blackout,
+  detecting: false,
   fps,
-  devices: publicDevices,
-  geometry: built.geometry,
-  points: built.points,
+  devices: noDevices ? [] : publicDevices,
+  geometry: noDevices ? [] : built.geometry,
+  points: noDevices ? [] : built.points,
   scene: structuredClone(scene),
 });
 const status = (): OpenRgbStatus => ({
@@ -586,16 +610,17 @@ const status = (): OpenRgbStatus => ({
   bundled: true,
   server_reachable: true,
   started_by_lumen: true,
-  mode: "child",
+  mode: query.has("legacy") ? "managed" : "child",
   service: { running: false, disabled: true },
   can_manage: true,
-  task_stale: false,
+  stale: false,
+  legacy_task: query.has("legacy"),
 });
 const publish = () => snapshotListeners.forEach((l) => l(snapshot()));
 
 setInterval(() => {
   if (paused || frameListeners.size === 0) return;
-  const f = renderFrame(scene, built.points, (performance.now() - started) / 1000);
+  const f = renderFrame(blackout ? { ...scene, brightness: 0 } : scene, built.points, (performance.now() - started) / 1000);
   frameListeners.forEach((l) => l(f));
 }, 1000 / 30);
 
@@ -624,6 +649,11 @@ export const mock: Backend = {
   },
   async setPaused(p) {
     paused = p;
+    publish();
+  },
+  async setLightsOff(off) {
+    app = { ...app, lights_off: off };
+    blackout = off ? "user" : null;
     publish();
   },
   async setFps(f) {
@@ -666,9 +696,46 @@ export const mock: Backend = {
     throw new Error("Handing OpenRGB back needs the desktop app.");
   },
   async appSettings() {
-    return { version: "0.2.0", auto_update: true, update: null };
+    return structuredClone(app);
   },
-  async setAutoUpdate() {},
+  async setAutoUpdate(enabled) {
+    app = { ...app, auto_update: enabled };
+  },
+  async setPowerSettings(power) {
+    app = { ...app, power: { ...power } };
+  },
+  async setBatteryAlerts(enabled) {
+    app = { ...app, battery_alerts: enabled };
+  },
+  async setShortcuts(enabled) {
+    app = { ...app, shortcuts: enabled };
+  },
+  async getConflicts() {
+    return conflicts;
+  },
+  async dismissConflict(id) {
+    conflicts = conflicts.filter((c) => c.id !== id);
+    conflictListeners.forEach((l) => l(conflicts));
+    return conflicts;
+  },
+  async diagnostics() {
+    const s = snapshot();
+    return [
+      "### Lumen diagnostics (browser mock)",
+      "",
+      `- **Lumen** ${app.version} · ${navigator.userAgent}`,
+      `- **Engine**: connected yes, ${s.devices.length} devices, ${s.fps} fps`,
+      "",
+      ...s.devices.map((d) => `- ${d.display_name} (${d.vendor}, ${d.led_count} LEDs)`),
+    ].join("\n");
+  },
+  async openLogFolder() {
+    throw new Error("The browser mock writes no log file.");
+  },
+  onConflicts(cb) {
+    conflictListeners.add(cb);
+    return () => conflictListeners.delete(cb);
+  },
   async checkForUpdate() {
     await new Promise((r) => setTimeout(r, 600));
     return null;

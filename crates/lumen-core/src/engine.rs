@@ -63,6 +63,27 @@ pub struct DeviceExtras {
     pub onboard: Option<Onboard>,
 }
 
+/// Why every LED is dark right now. While one applies the engine sends black
+/// once and then stays quiet; the scene itself is untouched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Blackout {
+    /// The user switched the lights off.
+    User,
+    /// The PC is going to sleep or shutting down.
+    Sleep,
+    /// The display turned off.
+    Display,
+    /// The session is locked.
+    Lock,
+    /// Nobody touched the PC for the configured idle time.
+    Idle,
+}
+
+/// How long an empty device list counts as "still detecting" after connecting
+/// (OpenRGB adds devices one by one while its detection runs).
+const DETECTION_GRACE: Duration = Duration::from_secs(15);
+
 #[derive(Debug)]
 pub enum Command {
     SetScene(Scene),
@@ -78,6 +99,8 @@ pub enum Command {
     /// Stop streaming to every device.
     Pause,
     Resume,
+    /// Turn every LED off (`Some`) or back on (`None`).
+    SetBlackout(Option<Blackout>),
     RefreshDevices,
     /// Change the render/stream rate (clamped to 15–120).
     SetFps(u32),
@@ -167,6 +190,10 @@ pub struct Snapshot {
     /// Why there is no connection, when the cause is more than "not running yet".
     pub problem: Option<String>,
     pub paused: bool,
+    /// Set while the lights are off, with the reason.
+    pub blackout: Option<Blackout>,
+    /// Connected, no devices yet, and OpenRGB may still be detecting them.
+    pub detecting: bool,
     /// Render/stream rate.
     pub fps: u32,
     pub devices: Vec<DeviceInfo>,
@@ -228,11 +255,16 @@ pub fn spawn(config: EngineConfig, scene: Scene) -> EngineHandle {
         last: Vec::new(),
         out: Vec::new(),
         paused: false,
+        blackout: None,
+        force_frame: false,
         dirty: true,
         fps_changed: false,
         start: Instant::now(),
         last_preview: Instant::now(),
         reload_at: None,
+        detect_since: None,
+        detection_done: false,
+        published_detecting: false,
         snapshot_tx,
         frames_tx,
     };
@@ -255,6 +287,9 @@ struct Engine {
     last: Vec<Vec<Color>>,
     out: Vec<Vec<Color>>,
     paused: bool,
+    blackout: Option<Blackout>,
+    /// Send one frame even though streaming is paused (the lights came back on).
+    force_frame: bool,
     /// Something changed since the last render; static scenes render once and
     /// then the tick returns immediately until this is set again.
     dirty: bool,
@@ -263,6 +298,12 @@ struct Engine {
     last_preview: Instant,
     /// Debounced device-list reload requested by the server.
     reload_at: Option<Instant>,
+    /// When OpenRGB's current detection began (connect or a rescan).
+    detect_since: Option<Instant>,
+    /// OpenRGB said detection is complete.
+    detection_done: bool,
+    /// `detecting` as last published, to notice the grace period running out.
+    published_detecting: bool,
     snapshot_tx: watch::Sender<Arc<Snapshot>>,
     frames_tx: broadcast::Sender<Arc<FrameSet>>,
 }
@@ -393,6 +434,21 @@ impl Engine {
                 self.dirty = true;
                 self.publish();
             }
+            Command::SetBlackout(blackout) => {
+                if self.blackout == blackout {
+                    return;
+                }
+                if self.blackout.is_some() && blackout.is_none() {
+                    // Back on: resend every LED, even if streaming is paused.
+                    self.last.iter_mut().for_each(Vec::clear);
+                    self.force_frame = true;
+                }
+                self.blackout = blackout;
+                self.dirty = true;
+                // Let the preview show the change on the next tick.
+                self.last_preview = Instant::now().checked_sub(Duration::from_secs(1)).unwrap_or_else(Instant::now);
+                self.publish();
+            }
             Command::RefreshDevices => {
                 if let Err(e) = self.reload_devices().await {
                     tracing::warn!(%e, "device refresh failed");
@@ -405,8 +461,18 @@ impl Engine {
 
     fn on_event(&mut self, ev: Event) {
         match ev {
-            Event::DeviceListUpdated | Event::DetectionComplete => {
+            Event::DeviceListUpdated => {
                 self.reload_at = Some(Instant::now() + Duration::from_millis(500));
+            }
+            Event::DetectionStarted => {
+                self.detect_since = Some(Instant::now());
+                self.detection_done = false;
+                self.publish();
+            }
+            Event::DetectionComplete => {
+                self.detection_done = true;
+                self.reload_at = Some(Instant::now() + Duration::from_millis(500));
+                self.publish();
             }
             Event::ServerName(name) => tracing::info!(%name, "OpenRGB server"),
             Event::Log { level, message } => tracing::debug!(level, %message, "OpenRGB log"),
@@ -417,10 +483,13 @@ impl Engine {
     async fn connect(&mut self) -> Result<mpsc::UnboundedReceiver<Event>> {
         let (client, events) = Client::connect(self.config.addr, &self.config.client_name).await?;
         self.client = Some(client);
+        self.detect_since = Some(Instant::now());
+        self.detection_done = false;
         if let Err(e) = self.reload_devices().await {
             // Keep nothing of a half-initialised session: with the client still
             // set, the run loop would consider us connected and never try again.
             self.client = None;
+            self.detect_since = None;
             return Err(e);
         }
         Ok(events)
@@ -428,8 +497,17 @@ impl Engine {
 
     fn disconnect(&mut self) {
         self.client = None;
+        self.detect_since = None;
         self.devices.clear();
         self.rebuild();
+    }
+
+    /// Connected with no devices, and OpenRGB may still be finding them.
+    fn detecting(&self) -> bool {
+        self.client.is_some()
+            && self.devices.is_empty()
+            && !self.detection_done
+            && self.detect_since.is_some_and(|t| t.elapsed() < DETECTION_GRACE)
     }
 
     async fn reload_devices(&mut self) -> Result<()> {
@@ -457,11 +535,15 @@ impl Engine {
         self.publish();
     }
 
-    fn publish(&self) {
+    fn publish(&mut self) {
+        let detecting = self.detecting();
+        self.published_detecting = detecting;
         let snapshot = Snapshot {
             connected: self.client.is_some(),
             problem: self.problem.clone(),
             paused: self.paused,
+            blackout: self.blackout,
+            detecting,
             fps: self.config.fps,
             devices: self.devices.iter().map(|d| DeviceInfo::from_device(d, self.extras.get(&d.id))).collect(),
             geometry: self.renderer.geometry().to_vec(),
@@ -481,18 +563,37 @@ impl Engine {
             }
         }
 
+        if self.published_detecting && !self.detecting() {
+            // The grace period ran out with nothing found: tell the UI.
+            self.publish();
+        }
         let Some(client) = self.client.clone() else { return };
-        if self.paused || self.devices.is_empty() {
+        if self.devices.is_empty() {
             return;
         }
-        // A static scene is rendered once; afterwards the tick costs nothing.
-        if !self.dirty && !self.scene.is_animated() {
+        // Paused means "leave the devices as they are" — unless they have to go
+        // dark, or come back from dark once.
+        if self.paused && self.blackout.is_none() && !self.force_frame {
+            return;
+        }
+        // A static scene (or a dark one) is sent once; afterwards the tick costs nothing.
+        let animated = self.blackout.is_none() && !self.paused && self.scene.is_animated();
+        if !self.dirty && !animated {
             return;
         }
         self.dirty = false;
+        self.force_frame = false;
 
         let t = self.start.elapsed().as_secs_f64();
-        self.renderer.render(&self.scene, t, &mut self.out);
+        if self.blackout.is_some() {
+            self.out.resize_with(self.devices.len(), Vec::new);
+            for (frame, device) in self.out.iter_mut().zip(&self.devices) {
+                frame.clear();
+                frame.resize(device.leds.len(), Color::BLACK);
+            }
+        } else {
+            self.renderer.render(&self.scene, t, &mut self.out);
+        }
 
         for (i, device) in self.devices.iter().enumerate() {
             if self.held.contains(&device.id) {

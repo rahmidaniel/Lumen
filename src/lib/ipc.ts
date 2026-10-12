@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings, FramePayload, Layer, Layout, OnboardEffect, OpenRgbStatus, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./types";
+import type { AppSettings, Conflict, FramePayload, Layer, Layout, OnboardEffect, OpenRgbStatus, PowerSettings, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./types";
 
 export interface Backend {
   getSnapshot(): Promise<Snapshot>;
@@ -12,6 +12,8 @@ export interface Backend {
   setBrightness(brightness: number): Promise<void>;
   setScene(scene: Scene): Promise<void>;
   setPaused(paused: boolean): Promise<void>;
+  /** The lights switch; remembered across restarts. */
+  setLightsOff(off: boolean): Promise<void>;
   setFps(fps: number): Promise<void>;
   refreshDevices(): Promise<void>;
   /** Store `effect` as the device's power-on lighting. */
@@ -30,6 +32,16 @@ export interface Backend {
   releaseOpenrgb(): Promise<OpenRgbStatus>;
   appSettings(): Promise<AppSettings>;
   setAutoUpdate(enabled: boolean): Promise<void>;
+  setPowerSettings(power: PowerSettings): Promise<void>;
+  setBatteryAlerts(enabled: boolean): Promise<void>;
+  /** Fails when another app already owns one of the shortcuts. */
+  setShortcuts(enabled: boolean): Promise<void>;
+  getConflicts(): Promise<Conflict[]>;
+  /** Stop warning about a vendor app; returns the remaining warnings. */
+  dismissConflict(id: string): Promise<Conflict[]>;
+  /** A Markdown report for bug reports. */
+  diagnostics(): Promise<string>;
+  openLogFolder(): Promise<void>;
   /** Ask the release feed; `null` means this is the latest version. */
   checkForUpdate(): Promise<UpdateInfo | null>;
   /** Download, verify and install the update found by the last check, then restart. */
@@ -39,6 +51,7 @@ export interface Backend {
   onOpenrgbStatus(cb: (s: OpenRgbStatus) => void): () => void;
   onUpdateAvailable(cb: (u: UpdateInfo) => void): () => void;
   onUpdateProgress(cb: (p: UpdateProgress) => void): () => void;
+  onConflicts(cb: (c: Conflict[]) => void): () => void;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -57,6 +70,7 @@ const tauriBackend: Backend = {
   setBrightness: (brightness) => invoke("set_brightness", { brightness }),
   setScene: (scene) => invoke("set_scene", { scene }),
   setPaused: (paused) => invoke("set_paused", { paused }),
+  setLightsOff: (off) => invoke("set_lights_off", { off }),
   setFps: (fps) => invoke("set_fps", { fps }),
   refreshDevices: () => invoke("refresh_devices"),
   saveToDevice: (deviceId, effect) => invoke("save_to_device", { deviceId, effect }),
@@ -71,6 +85,13 @@ const tauriBackend: Backend = {
   releaseOpenrgb: () => invoke<OpenRgbStatus>("release_openrgb"),
   appSettings: () => invoke<AppSettings>("app_settings"),
   setAutoUpdate: (enabled) => invoke("set_auto_update", { enabled }),
+  setPowerSettings: (power) => invoke("set_power_settings", { power }),
+  setBatteryAlerts: (enabled) => invoke("set_battery_alerts", { enabled }),
+  setShortcuts: (enabled) => invoke("set_shortcuts", { enabled }),
+  getConflicts: () => invoke<Conflict[]>("get_conflicts"),
+  dismissConflict: (id) => invoke<Conflict[]>("dismiss_conflict", { id }),
+  diagnostics: () => invoke<string>("diagnostics"),
+  openLogFolder: () => invoke("open_log_folder"),
   checkForUpdate: () => invoke<UpdateInfo | null>("check_for_update"),
   installUpdate: () => invoke("install_update"),
   onSnapshot: (cb) => subscribe<Snapshot>("snapshot", cb),
@@ -78,6 +99,7 @@ const tauriBackend: Backend = {
   onOpenrgbStatus: (cb) => subscribe<OpenRgbStatus>("openrgb_status", cb),
   onUpdateAvailable: (cb) => subscribe<UpdateInfo>("update_available", cb),
   onUpdateProgress: (cb) => subscribe<UpdateProgress>("update_progress", cb),
+  onConflicts: (cb) => subscribe<Conflict[]>("conflicts", cb),
 };
 
 let backendImpl: Backend | null = isTauri ? tauriBackend : null;

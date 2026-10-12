@@ -17,9 +17,11 @@ users have had a chance to update.
 
 The parts of Lumen where a bug would matter most:
 
-- **The elevated OpenRGB task on Windows.** *Let Lumen manage OpenRGB* registers a Task
-  Scheduler task (`LumenOpenRGB`) that runs OpenRGB with highest privileges for your
-  account, see [`docs/openrgb.md`](docs/openrgb.md).
+- **The OpenRGB service on Windows.** *Let Lumen manage OpenRGB* installs a service
+  (`LumenOpenRGB`) that runs a copy of OpenRGB as LocalSystem from
+  `Program Files\Lumen\OpenRGB`, and lets interactive users start and stop it; see
+  [`docs/openrgb.md`](docs/openrgb.md). Lumen 0.2 used a scheduled task instead, which
+  is known to be unsafe and is replaced by the service from Settings.
 - **Updates.** Lumen verifies every update against the public key in
   `src-tauri/tauri.conf.json` before installing it.
 - **The OpenRGB SDK port.** OpenRGB listens on `127.0.0.1:6742` without authentication,

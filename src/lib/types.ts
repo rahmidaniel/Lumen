@@ -154,11 +154,18 @@ export interface Scene {
   brightness: number;
 }
 
+/** Why every LED is dark right now. */
+export type Blackout = "user" | "sleep" | "display" | "lock" | "idle";
+
 export interface Snapshot {
   connected: boolean;
   /** Why there is no connection, when the cause is more than "not running yet". */
   problem: string | null;
   paused: boolean;
+  /** Set while the lights are off, with the reason. */
+  blackout: Blackout | null;
+  /** Connected, no devices yet, and OpenRGB may still be detecting them. */
+  detecting: boolean;
   /** Render/stream rate. */
   fps: number;
   devices: DeviceInfo[];
@@ -183,8 +190,27 @@ export interface OpenRgbStatus {
   service: { running: boolean; disabled: boolean } | null;
   /** Lumen could take OpenRGB over on this machine. */
   can_manage: boolean;
-  /** Lumen's task runs an executable other than this install's: re-register it. */
-  task_stale: boolean;
+  /** Lumen's service runs a different OpenRGB than this install's: update it. */
+  stale: boolean;
+  /** Still managed through Lumen 0.2's scheduled task, which other programs can abuse. */
+  legacy_task: boolean;
+}
+
+/** A running app that takes over lighting. */
+export interface Conflict {
+  id: string;
+  name: string;
+  /** Whose devices it takes over. */
+  brands: string;
+}
+
+/** Which PC states turn the lights off. */
+export interface PowerSettings {
+  sleep: boolean;
+  display_off: boolean;
+  lock: boolean;
+  /** 0 = never. */
+  idle_minutes: number;
 }
 
 export interface UpdateInfo {
@@ -203,4 +229,11 @@ export interface AppSettings {
   version: string;
   auto_update: boolean;
   update: UpdateInfo | null;
+  lights_off: boolean;
+  power: PowerSettings;
+  /** This platform reports sleep, display and lock changes. */
+  power_supported: boolean;
+  battery_alerts: boolean;
+  shortcuts: boolean;
+  log_dir: string | null;
 }

@@ -1,12 +1,20 @@
 //! Tauri shell: hosts the engine, exposes commands to the UI, forwards engine
-//! state as events, keeps a tray icon, and remembers the current scene.
+//! state as events, keeps a tray icon, remembers the current scene, and makes
+//! the lights follow the PC (sleep, screen, lock, idle).
 //!
 //! Footprint rules: the window is disposable. Closing it destroys the WebView
 //! (the only heavy part) while the engine keeps lighting from the tray; preview
 //! frames are only produced while a window is visible.
 
+mod alerts;
+mod conflicts;
+mod diagnostics;
+mod lights;
 mod openrgb;
+mod power;
+mod shortcuts;
 mod sidecar;
+mod tray;
 mod updates;
 
 use std::path::{Path, PathBuf};
@@ -14,15 +22,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lumen_core::engine::{self, Command, EngineConfig, EngineHandle, FrameSet, Snapshot};
-use lumen_core::{Layer, Layout, Profile, ProfileStore, Scene};
+use lumen_core::{Blackout, Layer, Layout, Profile, ProfileStore, Scene};
 use serde::{Deserialize, Serialize};
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 use tokio::sync::broadcast::error::RecvError;
-use tracing_subscriber::EnvFilter;
 
-const TRAY_ID: &str = "lumen-tray";
+use crate::lights::{Lights, PowerSettings};
+use crate::power::PowerEvent;
+
 const DEFAULT_FPS: u32 = 60;
 
 /// Small, user-editable preferences; the scene itself is autosaved separately.
@@ -33,6 +42,21 @@ struct Settings {
     /// Daily background update check (default on).
     #[serde(default)]
     auto_update: Option<bool>,
+    /// The lights switch: off stays off across restarts.
+    #[serde(default)]
+    lights_off: bool,
+    /// Which PC states turn the lights off.
+    #[serde(default)]
+    power: PowerSettings,
+    /// Low-battery notifications (default on).
+    #[serde(default)]
+    battery_alerts: Option<bool>,
+    /// Global keyboard shortcuts (default off).
+    #[serde(default)]
+    shortcuts: bool,
+    /// Vendor apps the user does not want to hear about again.
+    #[serde(default)]
+    dismissed_conflicts: Vec<String>,
 }
 
 impl Settings {
@@ -58,6 +82,21 @@ struct AppState {
     openrgb: openrgb::Manager,
     settings: Mutex<Settings>,
     data_dir: PathBuf,
+    lights: Lights,
+    /// Lighting apps found running, dismissed ones included.
+    conflicts: Mutex<Vec<conflicts::Conflict>>,
+    /// The profile loaded last (tray check mark, next/previous shortcuts).
+    current_profile: Mutex<Option<String>>,
+    /// Where Lumen's log files go, when file logging could be set up.
+    log_dir: Option<PathBuf>,
+}
+
+impl AppState {
+    fn update_settings(&self, change: impl FnOnce(&mut Settings)) {
+        let mut settings = self.settings.lock().unwrap();
+        change(&mut settings);
+        settings.save(&self.data_dir);
+    }
 }
 
 /// Preview frame as emitted to the UI: flat RGB bytes per device.
@@ -118,12 +157,15 @@ async fn set_paused(state: State<'_, AppState>, paused: bool) -> CmdResult {
 }
 
 #[tauri::command]
+async fn set_lights_off(app: AppHandle, off: bool) -> CmdResult {
+    set_user_lights_off(&app, off).await
+}
+
+#[tauri::command]
 async fn set_fps(state: State<'_, AppState>, fps: u32) -> CmdResult {
     let fps = fps.clamp(15, 120);
     send(&state.engine, Command::SetFps(fps)).await?;
-    let mut settings = state.settings.lock().unwrap();
-    settings.fps = Some(fps);
-    settings.save(&state.data_dir);
+    state.update_settings(|s| s.fps = Some(fps));
     Ok(())
 }
 
@@ -151,21 +193,29 @@ fn list_profiles(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
 }
 
 #[tauri::command]
-fn save_profile(state: State<'_, AppState>, name: String) -> CmdResult<Vec<String>> {
+fn save_profile(app: AppHandle, state: State<'_, AppState>, name: String) -> CmdResult<Vec<String>> {
     let scene = state.engine.snapshot().scene.clone();
-    state.profiles.save(&Profile { name, scene }).map_err(|e| e.to_string())?;
+    state.profiles.save(&Profile { name: name.clone(), scene }).map_err(|e| e.to_string())?;
+    *state.current_profile.lock().unwrap() = Some(name);
+    tray::refresh(&app);
     state.profiles.list().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn load_profile(state: State<'_, AppState>, name: String) -> CmdResult {
-    let profile = state.profiles.load(&name).map_err(|e| e.to_string())?;
-    send(&state.engine, Command::SetScene(profile.scene)).await
+async fn load_profile(app: AppHandle, name: String) -> CmdResult {
+    apply_profile(&app, &name).await
 }
 
 #[tauri::command]
-fn delete_profile(state: State<'_, AppState>, name: String) -> CmdResult<Vec<String>> {
+fn delete_profile(app: AppHandle, state: State<'_, AppState>, name: String) -> CmdResult<Vec<String>> {
     state.profiles.delete(&name).map_err(|e| e.to_string())?;
+    {
+        let mut current = state.current_profile.lock().unwrap();
+        if current.as_deref() == Some(name.as_str()) {
+            *current = None;
+        }
+    }
+    tray::refresh(&app);
     state.profiles.list().map_err(|e| e.to_string())
 }
 
@@ -180,20 +230,21 @@ async fn start_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status>
 }
 
 /// Restart OpenRGB: quietly when Lumen runs it, through an elevated prompt
-/// when it is the Windows service. The engine reconnects on its own.
+/// when it is the Windows service (or ignores the stop request). The engine
+/// reconnects on its own.
 #[tauri::command]
 async fn restart_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status> {
-    state.openrgb.restart().await
+    state.openrgb.restart(true).await
 }
 
-/// Windows: hand OpenRGB over to Lumen (stop and disable the service,
-/// register Lumen's elevated task), then start it. One admin prompt.
+/// Windows: hand OpenRGB over to Lumen (retire OpenRGB's service, install
+/// Lumen's own), then start it. Also updates an existing setup. One admin prompt.
 #[tauri::command]
 async fn adopt_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status> {
     state.openrgb.adopt().await
 }
 
-/// Windows: give OpenRGB back to its service. One admin prompt.
+/// Windows: remove Lumen's service and give OpenRGB back. One admin prompt.
 #[tauri::command]
 async fn release_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status> {
     state.openrgb.release().await
@@ -206,22 +257,90 @@ struct AppSettings {
     auto_update: bool,
     /// Update found by the last check, if any.
     update: Option<updates::UpdateInfo>,
+    lights_off: bool,
+    power: PowerSettings,
+    /// This platform reports sleep, display and lock changes.
+    power_supported: bool,
+    battery_alerts: bool,
+    shortcuts: bool,
+    log_dir: Option<String>,
 }
 
 #[tauri::command]
 fn app_settings(app: AppHandle, state: State<'_, AppState>) -> AppSettings {
+    let settings = state.settings.lock().unwrap().clone();
     AppSettings {
         version: app.package_info().version.to_string(),
-        auto_update: state.settings.lock().unwrap().auto_update.unwrap_or(true),
+        auto_update: settings.auto_update.unwrap_or(true),
         update: app.state::<updates::UpdateState>().available(),
+        lights_off: settings.lights_off,
+        power: settings.power,
+        power_supported: power::SUPPORTED,
+        battery_alerts: settings.battery_alerts.unwrap_or(true),
+        shortcuts: settings.shortcuts,
+        log_dir: state.log_dir.as_ref().map(|d| d.display().to_string()),
     }
 }
 
 #[tauri::command]
 fn set_auto_update(state: State<'_, AppState>, enabled: bool) {
-    let mut settings = state.settings.lock().unwrap();
-    settings.auto_update = Some(enabled);
-    settings.save(&state.data_dir);
+    state.update_settings(|s| s.auto_update = Some(enabled));
+}
+
+#[tauri::command]
+async fn set_power_settings(state: State<'_, AppState>, power: PowerSettings) -> CmdResult {
+    state.update_settings(|s| s.power = power);
+    let blackout = state.lights.update(|p| {
+        p.settings = power;
+        if power.idle_minutes == 0 {
+            p.idle = false;
+        }
+    });
+    send(&state.engine, Command::SetBlackout(blackout)).await
+}
+
+#[tauri::command]
+fn set_battery_alerts(state: State<'_, AppState>, enabled: bool) {
+    state.update_settings(|s| s.battery_alerts = Some(enabled));
+}
+
+#[tauri::command]
+fn set_shortcuts(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> CmdResult {
+    let result = shortcuts::apply(&app, enabled);
+    state.update_settings(|s| s.shortcuts = enabled && result.is_ok());
+    result
+}
+
+/// Running lighting apps the user has not dismissed.
+fn visible_conflicts(state: &AppState) -> Vec<conflicts::Conflict> {
+    let dismissed = state.settings.lock().unwrap().dismissed_conflicts.clone();
+    state.conflicts.lock().unwrap().iter().filter(|c| !dismissed.iter().any(|d| d == c.id)).cloned().collect()
+}
+
+#[tauri::command]
+fn get_conflicts(state: State<'_, AppState>) -> Vec<conflicts::Conflict> {
+    visible_conflicts(&state)
+}
+
+#[tauri::command]
+fn dismiss_conflict(state: State<'_, AppState>, id: String) -> Vec<conflicts::Conflict> {
+    state.update_settings(|s| {
+        if !s.dismissed_conflicts.contains(&id) {
+            s.dismissed_conflicts.push(id);
+        }
+    });
+    visible_conflicts(&state)
+}
+
+#[tauri::command]
+fn diagnostics(app: AppHandle) -> String {
+    diagnostics::report(&app)
+}
+
+#[tauri::command]
+fn open_log_folder(app: AppHandle, state: State<'_, AppState>) -> CmdResult {
+    let dir = state.log_dir.clone().ok_or_else(|| "Lumen is not writing a log file.".to_string())?;
+    app.opener().open_path(dir.display().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -235,7 +354,35 @@ async fn install_update(app: AppHandle) -> CmdResult {
 }
 
 async fn send(engine: &EngineHandle, cmd: Command) -> CmdResult {
-    if engine.send(cmd).await { Ok(()) } else { Err("engine is not running".into()) }
+    if engine.send(cmd).await {
+        Ok(())
+    } else {
+        Err("engine is not running".into())
+    }
+}
+
+/// The lights switch (top bar, tray, shortcut). Remembered across restarts.
+async fn set_user_lights_off(app: &AppHandle, off: bool) -> CmdResult {
+    let state = app.state::<AppState>();
+    state.update_settings(|s| s.lights_off = off);
+    let blackout = state.lights.update(|p| p.user_off = off);
+    send(&state.engine, Command::SetBlackout(blackout)).await?;
+    tray::refresh(app);
+    Ok(())
+}
+
+/// Brightness from the tray or a shortcut (the UI hears it through the snapshot).
+async fn set_brightness_from_outside(app: &AppHandle, brightness: f32) -> CmdResult {
+    send(&app.state::<AppState>().engine, Command::SetBrightness(brightness.clamp(0.0, 1.0))).await
+}
+
+async fn apply_profile(app: &AppHandle, name: &str) -> CmdResult {
+    let state = app.state::<AppState>();
+    let profile = state.profiles.load(name).map_err(|e| e.to_string())?;
+    send(&state.engine, Command::SetScene(profile.scene)).await?;
+    *state.current_profile.lock().unwrap() = Some(name.to_string());
+    tray::refresh(app);
+    Ok(())
 }
 
 fn data_dir(app: &AppHandle) -> PathBuf {
@@ -304,25 +451,35 @@ async fn autosave_scene(engine: EngineHandle, dir: PathBuf) {
     }
 }
 
-/// Forward snapshots to the UI and keep the tray tooltip (with battery levels) current.
+/// Forward snapshots to the UI, keep the tray tooltip (with battery levels)
+/// current, and the tray menu's check marks in step with brightness and lights.
 async fn forward_snapshots(handle: AppHandle, engine: EngineHandle) {
     let mut rx = engine.watch_snapshot();
     let mut last_tip = String::new();
+    let mut last_menu: Option<(Option<Blackout>, Option<u8>)> = None;
     while rx.changed().await.is_ok() {
         let snap: Arc<Snapshot> = rx.borrow().clone();
         let _ = handle.emit("snapshot", &*snap);
         let tip = tray_tooltip(&snap, handle.state::<updates::UpdateState>().available());
         if tip != last_tip {
-            if let Some(tray) = handle.tray_by_id(TRAY_ID) {
+            if let Some(tray) = handle.tray_by_id(tray::TRAY_ID) {
                 let _ = tray.set_tooltip(Some(&tip));
             }
             last_tip = tip;
         }
+        let menu = (snap.blackout, tray::brightness_step(snap.scene.brightness));
+        if last_menu.is_some_and(|m| m != menu) {
+            tray::refresh(&handle);
+        }
+        last_menu = Some(menu);
     }
 }
 
 fn tray_tooltip(snap: &Snapshot, update: Option<updates::UpdateInfo>) -> String {
     let mut parts = vec![if snap.connected { "Lumen".to_string() } else { "Lumen — waiting for OpenRGB".to_string() }];
+    if snap.blackout.is_some() {
+        parts.push("Lights off".to_string());
+    }
     if let Some(u) = update {
         parts.push(format!("Update {} available — open Lumen to install", u.version));
     }
@@ -356,13 +513,16 @@ async fn forward_frames(handle: AppHandle, engine: EngineHandle) {
     }
 }
 
-/// Restart OpenRGB when it stops answering, provided Lumen runs it itself
-/// (its task or a child process): after ten seconds of "running but not
-/// responding", at most once every two minutes.
+/// Keep an OpenRGB running while that is Lumen's job: restart it when it
+/// stops answering (after ten seconds, at most every two minutes), and start
+/// it again when it went away altogether (after five seconds, at most every
+/// thirty). An OpenRGB that belongs to someone else is left alone.
 async fn supervise_openrgb(handle: AppHandle, engine: EngineHandle) {
     let mut rx = engine.watch_snapshot();
     let mut unresponsive_since: Option<std::time::Instant> = None;
+    let mut gone_since: Option<std::time::Instant> = None;
     let mut last_restart: Option<std::time::Instant> = None;
+    let mut last_start: Option<std::time::Instant> = None;
     loop {
         tokio::select! {
             changed = rx.changed() => {
@@ -376,26 +536,133 @@ async fn supervise_openrgb(handle: AppHandle, engine: EngineHandle) {
             let snap = rx.borrow();
             (snap.connected, snap.problem.is_some())
         };
-        if connected || !unresponsive {
+        if connected {
             unresponsive_since = None;
-            continue;
-        }
-        let since = *unresponsive_since.get_or_insert_with(std::time::Instant::now);
-        if since.elapsed() < Duration::from_secs(10) || last_restart.is_some_and(|t| t.elapsed() < Duration::from_secs(120)) {
+            gone_since = None;
             continue;
         }
         let state: State<AppState> = handle.state();
-        if !state.openrgb.can_restart_quietly() {
-            continue;
+        let reachable = tokio::task::spawn_blocking(openrgb::server_reachable).await.unwrap_or(false);
+        let recently = |at: Option<std::time::Instant>, gap: u64| at.is_some_and(|t| t.elapsed() < Duration::from_secs(gap));
+
+        if reachable && unresponsive {
+            gone_since = None;
+            let since = *unresponsive_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() < Duration::from_secs(10) || recently(last_restart, 120) || !state.openrgb.can_restart_quietly() {
+                continue;
+            }
+            last_restart = Some(std::time::Instant::now());
+            unresponsive_since = None;
+            tracing::warn!("OpenRGB stopped answering; restarting it");
+            match state.openrgb.restart(false).await {
+                Ok(_) => tracing::info!("OpenRGB restarted"),
+                Err(e) => tracing::warn!(%e, "OpenRGB restart failed"),
+            }
+            let _ = handle.emit("openrgb_status", state.openrgb.status());
+        } else if !reachable {
+            unresponsive_since = None;
+            let since = *gone_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() < Duration::from_secs(5) || recently(last_start, 30) || !state.openrgb.responsible() {
+                continue;
+            }
+            last_start = Some(std::time::Instant::now());
+            gone_since = None;
+            tracing::warn!("OpenRGB went away; starting it again");
+            match state.openrgb.ensure_running().await {
+                Ok(_) => tracing::info!("OpenRGB is back"),
+                Err(e) => tracing::warn!(%e, "OpenRGB could not be started again"),
+            }
+            let _ = handle.emit("openrgb_status", state.openrgb.status());
         }
-        last_restart = Some(std::time::Instant::now());
-        unresponsive_since = None;
-        tracing::warn!("OpenRGB stopped answering; restarting it");
-        match state.openrgb.restart().await {
-            Ok(_) => tracing::info!("OpenRGB restarted"),
-            Err(e) => tracing::warn!(%e, "OpenRGB restart failed"),
+    }
+}
+
+/// A power event, with a way to say "done" for the urgent ones.
+type PowerMessage = (PowerEvent, Option<std::sync::mpsc::Sender<()>>);
+
+/// Turn the lights off and on as the PC sleeps, wakes, locks, turns its screen
+/// off or sits idle, as far as the user's settings ask for it.
+async fn follow_power(handle: AppHandle, engine: EngineHandle, mut events: tokio::sync::mpsc::UnboundedReceiver<PowerMessage>) {
+    let mut idle_check = tokio::time::interval(Duration::from_secs(5));
+    idle_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            message = events.recv() => {
+                let Some((event, done)) = message else { return };
+                let blackout = handle.state::<AppState>().lights.update(|p| p.apply(event));
+                engine.send(Command::SetBlackout(blackout)).await;
+                if event.is_urgent() {
+                    // Give the engine a frame or two to send black before the OS moves on.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                if let Some(done) = done {
+                    let _ = done.send(());
+                }
+                if event == PowerEvent::Resume {
+                    // USB devices often wake up in their own lighting mode: reload
+                    // them so OpenRGB's direct mode is set again.
+                    let engine = engine.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(4)).await;
+                        engine.send(Command::RefreshDevices).await;
+                    });
+                }
+            }
+            _ = idle_check.tick() => {
+                let state = handle.state::<AppState>();
+                if state.lights.get().settings.idle_minutes == 0 {
+                    continue;
+                }
+                let Some(seconds) = power::idle_seconds() else { continue };
+                let blackout = state.lights.update(|p| p.set_idle_seconds(seconds));
+                engine.send(Command::SetBlackout(blackout)).await;
+            }
         }
-        let _ = handle.emit("openrgb_status", state.openrgb.status());
+    }
+}
+
+/// Watch for vendor lighting apps every twenty seconds; tell the UI when the set changes.
+async fn watch_conflicts(handle: AppHandle) {
+    loop {
+        let running = tokio::task::spawn_blocking(conflicts::running_processes).await.unwrap_or_default();
+        let found = conflicts::detect(&running);
+        let state = handle.state::<AppState>();
+        let changed = {
+            let mut known = state.conflicts.lock().unwrap();
+            let changed = *known != found;
+            *known = found;
+            changed
+        };
+        if changed {
+            let visible = visible_conflicts(&state);
+            if !visible.is_empty() {
+                tracing::info!(apps = ?visible.iter().map(|c| c.name).collect::<Vec<_>>(), "lighting apps running alongside Lumen");
+            }
+            let _ = handle.emit("conflicts", visible);
+        }
+        tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+}
+
+/// Notify when a wireless device runs low (see [`alerts`]).
+async fn battery_alerts(handle: AppHandle, engine: EngineHandle) {
+    let mut rx = engine.watch_snapshot();
+    let mut alerts = alerts::BatteryAlerts::default();
+    while rx.changed().await.is_ok() {
+        let snap: Arc<Snapshot> = rx.borrow().clone();
+        let enabled = handle.state::<AppState>().settings.lock().unwrap().battery_alerts.unwrap_or(true);
+        for device in &snap.devices {
+            let Some(battery) = device.battery else { continue };
+            let key = if device.location.is_empty() { &device.name } else { &device.location };
+            if let Some(alert) = alerts.check(key, &device.display_name, battery) {
+                tracing::info!(device = %device.display_name, percent = battery.percent, notified = enabled, "battery low");
+                if enabled {
+                    if let Err(e) = handle.notification().builder().title(&alert.title).body(&alert.body).show() {
+                        tracing::warn!(%e, "could not show the battery notification");
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -414,46 +681,19 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show Lumen", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Lumen", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-    let icon = app.default_window_icon().cloned().ok_or(tauri::Error::WindowNotFound)?;
-
-    TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon)
-        .tooltip("Lumen")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
-            "quit" => app.exit(0),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                show_main_window(tray.app_handle());
-            }
-        })
-        .build(app)?;
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,lumen=debug,lumen_core=debug,openrgb_sdk=info")),
-        )
-        .init();
-
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(shortcuts::handle).build())
         .setup(|app| {
             let handle = app.handle().clone();
+            let log_dir = diagnostics::init_logging(handle.path().app_log_dir().ok());
+            tracing::info!(version = %handle.package_info().version, log_dir = ?log_dir, "Lumen starting");
+
             let dir = data_dir(&handle);
             let scene = load_last_scene(&dir);
             let settings = Settings::load(&dir);
@@ -467,10 +707,20 @@ pub fn run() {
                 engine: engine.clone(),
                 profiles: ProfileStore::new(dir.join("profiles")),
                 openrgb: openrgb::Manager::new(handle.path().resource_dir().ok(), dir.clone()),
-                settings: Mutex::new(settings),
+                settings: Mutex::new(settings.clone()),
                 data_dir: dir.clone(),
+                lights: Lights::new(settings.power, settings.lights_off),
+                conflicts: Mutex::new(Vec::new()),
+                current_profile: Mutex::new(None),
+                log_dir,
             });
             app.manage(updates::UpdateState::default());
+
+            // Lights stay off if that is how the user left them.
+            if settings.lights_off {
+                let engine = engine.clone();
+                tauri::async_runtime::spawn(async move { engine.send(Command::SetBlackout(Some(Blackout::User))).await });
+            }
 
             // The window is configured hidden; show it unless we were launched
             // at login (autostart passes --hidden) so lighting starts silently.
@@ -492,10 +742,35 @@ pub fn run() {
                 });
             }
 
+            // Power and session events arrive on the watcher's own thread; urgent
+            // ones (sleep, shutdown) wait there until the lights are out.
+            {
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PowerMessage>();
+                power::watch(move |event| {
+                    if event.is_urgent() {
+                        let (done_tx, done_rx) = std::sync::mpsc::channel();
+                        if tx.send((event, Some(done_tx))).is_ok() {
+                            let _ = done_rx.recv_timeout(Duration::from_millis(1500));
+                        }
+                    } else {
+                        let _ = tx.send((event, None));
+                    }
+                });
+                tauri::async_runtime::spawn(follow_power(handle.clone(), engine.clone(), rx));
+            }
+
+            if settings.shortcuts {
+                if let Err(e) = shortcuts::apply(&handle, true) {
+                    tracing::warn!(%e, "keyboard shortcuts unavailable");
+                }
+            }
+
             tauri::async_runtime::spawn(forward_snapshots(handle.clone(), engine.clone()));
             tauri::async_runtime::spawn(forward_frames(handle.clone(), engine.clone()));
             tauri::async_runtime::spawn(autosave_scene(engine.clone(), dir));
             tauri::async_runtime::spawn(sidecar::run(engine.clone()));
+            tauri::async_runtime::spawn(battery_alerts(handle.clone(), engine.clone()));
+            tauri::async_runtime::spawn(watch_conflicts(handle.clone()));
             {
                 let enabled = {
                     let h = handle.clone();
@@ -505,7 +780,7 @@ pub fn run() {
             }
             tauri::async_runtime::spawn(supervise_openrgb(handle.clone(), engine.clone()));
 
-            setup_tray(&handle)?;
+            tray::setup(&handle)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -515,6 +790,7 @@ pub fn run() {
             set_brightness,
             set_scene,
             set_paused,
+            set_lights_off,
             set_fps,
             refresh_devices,
             save_to_device,
@@ -529,6 +805,13 @@ pub fn run() {
             release_openrgb,
             app_settings,
             set_auto_update,
+            set_power_settings,
+            set_battery_alerts,
+            set_shortcuts,
+            get_conflicts,
+            dismiss_conflict,
+            diagnostics,
+            open_log_folder,
             check_for_update,
             install_update,
         ])

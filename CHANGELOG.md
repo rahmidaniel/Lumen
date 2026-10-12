@@ -6,7 +6,41 @@ updates itself from Settings → Updates.
 
 ## Unreleased
 
+### Security
+
+- **Lumen 0.2's *Let Lumen manage OpenRGB* could be misused to get administrator
+  rights.** Its scheduled task ran OpenRGB with highest privileges straight from the
+  per-user install folder, with OpenRGB's plugins loaded from the user's profile, so any
+  program running as the user could swap a file there and have it run elevated without a
+  prompt. Managed mode is now a Windows service that runs a copy of OpenRGB from
+  `Program Files\Lumen\OpenRGB`, which only administrators can change. If you turned the
+  old mode on, Lumen shows **Security fix needed**: Settings → OpenRGB → *Switch to the
+  secure setup* replaces the task (one admin prompt).
+- Elevated steps no longer run a script from the temp folder: the script travels inside
+  the elevated PowerShell's own command line.
+
+### New
+
+- **Lights follow the PC** (Windows): off while it sleeps, shuts down or turns the screen
+  off, and optionally while it is locked or idle (Settings → Lights).
+- A **lights switch** in the top bar, the tray menu and as a shortcut, remembered across
+  restarts. Pause now freezes the effects only.
+- **Low-battery notifications** at 20 % and 5 %.
+- A warning when **another lighting app** (Synapse, G HUB, iCUE, SteelSeries GG, Armoury
+  Crate, NGENUITY, SignalRGB, …) is running, with how to get it out of the way.
+- **Tray menu** with the lights switch, brightness and profiles.
+- Optional **global shortcuts**: Ctrl+Alt+Shift+L for the lights, ↑/↓ for brightness, →/←
+  for profiles.
+- **Settings → Help**: copy a diagnostics report for bug reports and open the log folder.
+  Release builds now write a log file (they had none).
+- When OpenRGB runs but finds no devices, the canvas explains the usual causes instead of
+  spinning forever.
 - New app icon, replacing the Tauri placeholder (installer, taskbar, tray, Start menu).
+
+### Fixed
+
+- When OpenRGB crashed or was ended, Lumen never started it again; now it does within a
+  few seconds.
 
 ## 0.2.2 — 2026-10-12
 

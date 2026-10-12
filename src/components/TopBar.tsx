@@ -1,4 +1,4 @@
-import { BatteryCharging, BatteryFull, BatteryLow, BatteryMedium, Cpu, Keyboard, Mouse, Pause, Play } from "lucide-react";
+import { BatteryCharging, BatteryFull, BatteryLow, BatteryMedium, Cpu, Keyboard, Mouse, Pause, Play, Power, ShieldAlert, TriangleAlert } from "lucide-react";
 import { useStore } from "../store";
 import { Badge, IconButton, cx } from "./ui";
 import type { Battery, DeviceInfo } from "../lib/types";
@@ -32,13 +32,16 @@ function BatteryChip({ device, battery }: { device: DeviceInfo; battery: Battery
 export function TopBar() {
   const snapshot = useStore((s) => s.snapshot);
   const openrgb = useStore((s) => s.openrgb);
+  const conflicts = useStore((s) => s.conflicts);
   const setTab = useStore((s) => s.setTab);
   const setBrightness = useStore((s) => s.setBrightness);
   const setPaused = useStore((s) => s.setPaused);
+  const setLightsOff = useStore((s) => s.setLightsOff);
 
   const update = useStore((s) => s.update.info);
   const connected = snapshot?.connected ?? false;
   const paused = snapshot?.paused ?? false;
+  const lightsOff = snapshot?.blackout === "user";
   const brightness = snapshot?.scene.brightness ?? 1;
   const powered = (snapshot?.devices ?? []).filter((d) => d.battery);
 
@@ -63,6 +66,20 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-4">
+        {conflicts.length > 0 && (
+          <button onClick={() => setTab("devices")} title="Another lighting app is running — open Devices for details">
+            <Badge tone="warn">
+              <TriangleAlert size={12} /> {conflicts.length === 1 ? `${conflicts[0].name} running` : `${conflicts.length} lighting apps running`}
+            </Badge>
+          </button>
+        )}
+        {openrgb?.legacy_task && (
+          <button onClick={() => setTab("settings")} title="Lumen 0.2's OpenRGB task can be misused by other programs — open Settings to fix it">
+            <Badge tone="danger">
+              <ShieldAlert size={12} /> Security fix needed
+            </Badge>
+          </button>
+        )}
         {update && (
           <button onClick={() => setTab("settings")} title={`Lumen ${update.version} is available — open Settings to install`}>
             <Badge tone="accent">Update {update.version}</Badge>
@@ -87,9 +104,19 @@ export function TopBar() {
           <span className="w-9 text-right font-mono tabular-nums">{Math.round(brightness * 100)}%</span>
         </label>
 
-        <IconButton label={paused ? "Resume lighting" : "Pause lighting"} active={paused} onClick={() => setPaused(!paused)}>
-          {paused ? <Play size={16} /> : <Pause size={16} />}
-        </IconButton>
+        <div className="flex items-center gap-1">
+          <IconButton label={paused ? "Resume effects" : "Pause effects"} active={paused} onClick={() => setPaused(!paused)}>
+            {paused ? <Play size={16} /> : <Pause size={16} />}
+          </IconButton>
+          <IconButton
+            label={lightsOff ? "Turn the lights on" : "Turn the lights off"}
+            active={lightsOff}
+            className={cx(lightsOff && "text-warn")}
+            onClick={() => setLightsOff(!lightsOff)}
+          >
+            <Power size={16} />
+          </IconButton>
+        </div>
       </div>
     </header>
   );

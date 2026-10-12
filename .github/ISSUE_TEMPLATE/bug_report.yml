@@ -13,14 +13,17 @@ body:
       description: What you did, what you expected, and what Lumen did instead. Screenshots help.
     validations:
       required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: In Lumen 0.3 or later, Settings → Help → Copy diagnostics, then paste it here. It covers the version, OS, OpenRGB setup, devices and recent logs (no serial numbers), so you can skip the fields below.
   - type: input
     id: version
     attributes:
       label: Lumen version
       description: Settings → Updates shows it.
-      placeholder: "0.2.2"
-    validations:
-      required: true
+      placeholder: "0.3.0"
   - type: dropdown
     id: os
     attributes:
