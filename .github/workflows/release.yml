@@ -1,0 +1,79 @@
+# Builds installers for every platform and attaches them to a draft GitHub
+# release. Triggered by pushing a tag like `v0.1.0` (the version must match
+# src-tauri/tauri.conf.json) or manually from the Actions tab.
+#
+# Each build runs `npm run fetch:openrgb` (via Tauri's beforeBuildCommand), which
+# downloads the pinned OpenRGB 1.0 build for that platform and bundles it.
+#
+# Artifacts are unsigned. To sign the macOS build add the APPLE_* secrets
+# tauri-action understands (APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+# APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) and pass them
+# through `env:` below — see https://tauri.app/distribute/sign/macos/.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: ''
+          - name: macOS Apple Silicon
+            os: macos-latest
+            args: '--target aarch64-apple-darwin'
+            target: aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-latest
+            args: '--target x86_64-apple-darwin'
+            target: x86_64-apple-darwin
+          - name: Linux x64
+            os: ubuntu-22.04
+            args: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies (WebKitGTK, tray, hidapi)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Lumen v__VERSION__'
+          releaseBody: |
+            Installers for every platform, each with OpenRGB 1.0 bundled.
+
+            - **Windows**: `Lumen_<version>_x64-setup.exe` — SmartScreen will warn (unsigned); choose *More info → Run anyway*.
+            - **macOS**: `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`) — unsigned, so run `xattr -cr /Applications/Lumen.app` once after copying it in.
+            - **Linux**: `.deb` / `.rpm` (installs OpenRGB's udev rules) or the `.AppImage` (needs OpenRGB's udev rules installed separately).
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

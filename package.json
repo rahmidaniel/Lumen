@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "fetch:openrgb": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/fetch-openrgb.ps1"
+    "fetch:openrgb": "node scripts/fetch-openrgb.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

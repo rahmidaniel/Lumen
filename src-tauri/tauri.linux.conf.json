@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/lib/udev/rules.d/60-openrgb.rules": "resources/openrgb/60-openrgb.rules"
+        },
+        "postInstallScript": "packaging/linux/postinst.sh"
+      },
+      "rpm": {
+        "files": {
+          "/usr/lib/udev/rules.d/60-openrgb.rules": "resources/openrgb/60-openrgb.rules"
+        },
+        "postInstallScript": "packaging/linux/postinst.sh"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  }
+}

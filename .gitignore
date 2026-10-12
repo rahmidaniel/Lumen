@@ -24,5 +24,5 @@ scripts/*.log
 Thumbs.db
 *.log
 
-# Bundled OpenRGB (fetched by scripts/fetch-openrgb.ps1)
+# Bundled OpenRGB (fetched by scripts/fetch-openrgb.mjs)
 src-tauri/resources/openrgb/

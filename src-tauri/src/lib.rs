@@ -360,7 +360,7 @@ pub fn run() {
             app.manage(AppState {
                 engine: engine.clone(),
                 profiles: ProfileStore::new(dir.join("profiles")),
-                openrgb: openrgb::Manager::new(handle.path().resource_dir().ok()),
+                openrgb: openrgb::Manager::new(handle.path().resource_dir().ok(), dir.clone()),
                 settings: Mutex::new(settings),
                 data_dir: dir.clone(),
             });

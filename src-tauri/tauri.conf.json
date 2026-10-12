@@ -30,7 +30,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "RGB lighting studio built on OpenRGB",
+    "longDescription": "Lumen drives every RGB device through OpenRGB and paints one scene across all of them: a virtual canvas, layered effects, profiles, battery status and boot lighting, from a small tray app. OpenRGB 1.0 is bundled.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

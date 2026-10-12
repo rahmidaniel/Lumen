@@ -1,10 +1,11 @@
 //! Vendor sidecar: the few things OpenRGB's protocol cannot do for us.
 //!
-//! Today that is Razer only — battery level and writing a power-on effect to
-//! the device's flash. The sidecar never streams colours; it sends short,
-//! reply-matched HID transactions and, for flash writes, pauses the engine so
-//! nothing else is talking to the device at that moment.
+//! Today that is Razer (battery level and writing a power-on effect to the
+//! device's flash) and HyperX (battery). The sidecar never streams colours; it
+//! sends short, reply-matched HID transactions and, for flash writes, pauses
+//! the engine so nothing else is talking to the device at that moment.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use hidapi::HidApi;
@@ -59,9 +60,9 @@ pub enum Target {
     HyperX(u16),
 }
 
-/// Parse `vid_xxxx&pid_xxxx` out of an OpenRGB HID location such as
+/// Parse `vid_xxxx&pid_xxxx` out of a Windows HID location such as
 /// `HID: \\?\hid#vid_1532&pid_0c05&mi_00#…`.
-fn usb_ids(location: &str) -> Option<(u16, u16)> {
+fn parse_usb_ids(location: &str) -> Option<(u16, u16)> {
     let lower = location.to_ascii_lowercase();
     let hex4 = |key: &str| {
         let idx = lower.find(key)? + key.len();
@@ -70,12 +71,33 @@ fn usb_ids(location: &str) -> Option<(u16, u16)> {
     Some((hex4("vid_")?, hex4("pid_")?))
 }
 
-pub fn target_for(location: &str) -> Option<Target> {
-    match usb_ids(location)? {
-        (lumen_vendor_razer::VENDOR_ID, pid) => Some(Target::Razer(pid)),
-        (lumen_vendor_hyperx::VENDOR_ID, pid) => Some(Target::HyperX(pid)),
+fn classify(vid: u16, pid: u16) -> Option<Target> {
+    match vid {
+        lumen_vendor_razer::VENDOR_ID => Some(Target::Razer(pid)),
+        lumen_vendor_hyperx::VENDOR_ID => Some(Target::HyperX(pid)),
         _ => None,
     }
+}
+
+/// Which sidecar, if any, can talk to the device at an OpenRGB `location`.
+///
+/// Windows locations embed the USB IDs. On Linux and macOS OpenRGB reports
+/// hidapi's device path instead (`HID: /dev/hidraw3`, `HID: DevSrvsID:4295…`),
+/// so the path is looked up in the HID enumeration to recover vendor/product.
+pub fn target_for(location: &str) -> Option<Target> {
+    if let Some((vid, pid)) = parse_usb_ids(location) {
+        return classify(vid, pid);
+    }
+    let path = location.strip_prefix("HID:")?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let api = HidApi::new().ok()?;
+    let found = api
+        .device_list()
+        .find(|d| d.path().to_str().map_or(false, |p| p.eq_ignore_ascii_case(path)))
+        .and_then(|d| classify(d.vendor_id(), d.product_id()));
+    found
 }
 
 /// Razer product ID from an OpenRGB HID location, if it is a Razer device.
@@ -86,17 +108,15 @@ pub fn razer_pid(location: &str) -> Option<u16> {
     }
 }
 
-fn sidecar_devices(devices: &[DeviceInfo]) -> Vec<(u32, Target)> {
-    devices.iter().filter_map(|d| target_for(&d.location).map(|t| (d.id, t))).collect()
-}
-
 /// Poll battery state for every sidecar device OpenRGB knows about: on each
 /// device-list change, then every minute — with a quick retry while a device
 /// has never answered (wireless gear dozes and misses the first probe).
 pub async fn run(engine: EngineHandle) {
     let mut snapshots = engine.watch_snapshot();
     let mut known: Vec<(u32, Target)> = Vec::new();
-    let mut answered: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut answered: HashSet<u32> = HashSet::new();
+    // Location → sidecar target; resolving may enumerate HID devices, so do it once per location.
+    let mut resolved: HashMap<String, Option<Target>> = HashMap::new();
     let mut ticker = tokio::time::interval(Duration::from_secs(60));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut retry: Option<Duration> = None;
@@ -107,7 +127,15 @@ pub async fn run(engine: EngineHandle) {
                 if changed.is_err() {
                     return;
                 }
-                let now = sidecar_devices(&snapshots.borrow().devices);
+                let devices: Vec<DeviceInfo> = snapshots.borrow().devices.clone();
+                resolved.retain(|location, _| devices.iter().any(|d| &d.location == location));
+                let now: Vec<(u32, Target)> = devices
+                    .iter()
+                    .filter_map(|d| {
+                        let target = *resolved.entry(d.location.clone()).or_insert_with(|| target_for(&d.location));
+                        target.map(|t| (d.id, t))
+                    })
+                    .collect();
                 if now == known {
                     continue;
                 }
@@ -219,5 +247,14 @@ mod tests {
         assert_eq!(razer_pid(r"HID: \\?\hid#vid_03f0&pid_0f98&mi_01#…"), None);
         assert_eq!(target_for(r"HID: \\?\hid#vid_046d&pid_c539&mi_02#…"), None);
         assert_eq!(target_for("I2C: 0x29"), None);
+    }
+
+    #[test]
+    fn unknown_hid_paths_resolve_to_nothing() {
+        // Linux/macOS-style locations go through the HID enumeration; a path
+        // that no device has must not match anything.
+        assert_eq!(target_for("HID: /dev/hidraw999"), None);
+        assert_eq!(target_for("HID: DevSrvsID:0"), None);
+        assert_eq!(target_for("HID: "), None);
     }
 }

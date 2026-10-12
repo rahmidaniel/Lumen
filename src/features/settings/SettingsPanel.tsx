@@ -40,7 +40,7 @@ export function SettingsPanel() {
         <span className="text-sm font-medium">Startup</span>
         <div className="flex items-center justify-between gap-3">
           <div className="flex flex-col">
-            <span className="text-sm">Start with {navigator.platform.startsWith("Mac") ? "macOS" : "Windows"}</span>
+            <span className="text-sm">{navigator.platform.startsWith("Mac") ? "Start with macOS" : navigator.platform.startsWith("Win") ? "Start with Windows" : "Start at login"}</span>
             <span className="text-xs text-muted">Launches hidden in the tray and lights your devices as soon as you log in.</span>
           </div>
           <Toggle checked={autostart === true} onChange={toggleAutostart} label="Start at login" />

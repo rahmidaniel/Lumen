@@ -11,27 +11,50 @@ See [`docs/PLAN.md`](docs/PLAN.md) for architecture and milestones, and
 
 Stack: Tauri 2 · Rust · React 19 · TypeScript · Tailwind.
 
+## Installing
+
+Grab the installer for your platform from the
+[releases page](../../releases). Every package bundles OpenRGB 1.0, so nothing
+else needs to be installed. The builds are not code-signed yet, hence the
+one-time warnings below.
+
+| Platform | Package | Notes |
+|---|---|---|
+| Windows 10/11 x64 | `Lumen_<version>_x64-setup.exe` | Per-user install. SmartScreen will warn about an unknown publisher: *More info → Run anyway*. If OpenRGB's own installer is present, Lumen attaches to its service instead of starting the bundled copy. |
+| macOS 11+ | `Lumen_<version>_aarch64.dmg` (Apple Silicon) / `Lumen_<version>_x64.dmg` (Intel) | Drag to Applications, then run `xattr -cr /Applications/Lumen.app` once (Gatekeeper blocks unsigned apps). Keyboards need *Input Monitoring* permission for OpenRGB; grant it when macOS asks. |
+| Linux x64 | `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE), `.AppImage` | deb/rpm install OpenRGB's udev rules so devices work without root. The AppImage cannot; install `openrgb` from your distro (its udev rules suffice) or copy OpenRGB's `60-openrgb.rules` to `/etc/udev/rules.d/`. |
+
+Lumen lives in the tray: close the window and lighting keeps running; "Start at
+login" in Settings launches it hidden.
+
 ## Developing
 
-Prerequisites: [Rust](https://rustup.rs) (MSVC toolchain), Node 24+, and
-OpenRGB 1.0. On Windows the MSVC linker comes from the Visual Studio 2022
-Build Tools (C++ workload); `scripts/setup-windows.ps1` installs OpenRGB and the
-Build Tools — run it from an elevated PowerShell:
+Prerequisites: [Rust](https://rustup.rs) stable, Node 24+, and the platform
+build tools:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
-```
+- **Windows**: Visual Studio 2022 Build Tools with the C++ workload (Rust's MSVC
+  linker). `scripts/setup-windows.ps1` installs them plus OpenRGB — run it from an
+  elevated PowerShell: `powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1`.
+- **Linux** (Debian/Ubuntu): `sudo apt install libwebkit2gtk-4.1-dev
+  libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
+  libudev-dev` (the last one is for hidapi).
+- **macOS**: Xcode command line tools (`xcode-select --install`).
 
 Then:
 
 ```sh
 npm install
-cargo test --workspace        # protocol, canvas, effects, profile tests
+cargo test --workspace        # protocol, canvas, effects, profile, sidecar tests
 npm run tauri dev             # starts Vite + the Tauri shell; attaches to OpenRGB's SDK server
                               # (OpenRGB 1.0 installs a Windows service that is already listening
                               # on 6742; otherwise Lumen launches OpenRGB headless itself)
 npm run dev                   # UI only, in a browser, against an in-memory mock backend
 ```
+
+`npm run tauri dev` needs an OpenRGB to talk to: either install OpenRGB, or run
+`npm run fetch:openrgb` once and point Lumen at it with
+`LUMEN_OPENRGB_PATH=src-tauri/resources/openrgb/OpenRGB.exe` (Windows; on Linux
+the AppImage, on macOS the unpacked `OpenRGB.app/Contents/MacOS/OpenRGB`).
 
 Layout:
 
@@ -42,28 +65,45 @@ crates/lumen-vendor-razer   Razer HID sidecar: battery, onboard (boot) effects
 crates/lumen-vendor-hyperx  HyperX HID sidecar: battery
 src-tauri                   Tauri shell: commands, events, tray, OpenRGB process management
 src                         React UI
+scripts                     fetch-openrgb.mjs (bundling), setup-windows.ps1, measure-footprint.ps1
+.github/workflows           ci.yml (tests on 3 OSes), release.yml (installers + draft release)
 ```
 
 ## Packaging
 
 ```sh
-npm run tauri build           # NSIS installer in src-tauri/target/release/bundle/nsis/
+npm run tauri build
 ```
 
-The installer is self-contained: `scripts/fetch-openrgb.ps1` (run automatically by the
-build) downloads the official OpenRGB 1.0 portable build, verifies its SHA-256 and ships
-it inside the installer under `openrgb/`. At runtime Lumen attaches to an OpenRGB that is
-already running (e.g. the service OpenRGB's own installer registers) and otherwise starts
-the bundled copy as a silent, window-less SDK server, stopping it again on exit.
-OpenRGB is GPL-2.0-or-later and is bundled unmodified with its licence text —
-see `THIRD_PARTY_NOTICES.md`.
+builds the installer for the current platform (`src-tauri/target/release/bundle/`):
+NSIS on Windows, `.app` + `.dmg` on macOS, `.deb` + `.rpm` + `.AppImage` on Linux.
+The platform-specific parts of the Tauri config live in
+`src-tauri/tauri.{windows,macos,linux}.conf.json`.
+
+The packages are self-contained: `scripts/fetch-openrgb.mjs` (run automatically by
+the build) downloads the official OpenRGB 1.0 asset for the target platform and
+architecture, verifies its SHA-256 and places it under `src-tauri/resources/openrgb/`,
+which the bundler ships as `openrgb/` next to the app:
+
+| platform | bundled form | how Lumen runs it |
+|---|---|---|
+| Windows | portable `OpenRGB.exe` | directly |
+| macOS | the official `OpenRGB.zip` | unpacked once into Lumen's data dir with `ditto` (the `.app` holds framework symlinks the bundler would flatten) |
+| Linux | `OpenRGB.AppImage` + `60-openrgb.rules` | AppImage with `APPIMAGE_EXTRACT_AND_RUN=1` (no FUSE needed); deb/rpm install the udev rules and reload udev |
+
+At runtime Lumen first attaches to an OpenRGB that is already listening on 6742
+(e.g. the service OpenRGB's own installer registers), otherwise starts the bundled
+copy as a silent, window-less SDK server (`--server --noautoconnect`) and stops it
+again on exit; if that fails it falls back to a system-wide install.
+`LUMEN_OPENRGB_PATH` overrides the executable. OpenRGB is GPL-2.0-or-later and is
+bundled unmodified with its licence text — see `THIRD_PARTY_NOTICES.md`.
 
 Footprint: the window is disposable (closing it destroys the WebView while lighting
 continues from the tray), preview frames exist only while it is visible and are capped at
 25 fps (8 fps at reduced resolution when the window is not focused), static scenes render
-once, and the render rate is selectable (30/60 fps). "Start with Windows" launches hidden
-via `--hidden`. Measured with `scripts/measure-footprint.ps1` on the release build while
-streaming a 60 fps effect to four devices (2026-10-11):
+once, and the render rate is selectable (30/60 fps). "Start at login" launches hidden
+via `--hidden`. Measured with `scripts/measure-footprint.ps1` on the Windows release
+build while streaming a 60 fps effect to four devices (2026-10-11):
 
 | state | processes | CPU (one core) | working set | private |
 |---|---|---|---|---|
@@ -72,3 +112,23 @@ streaming a 60 fps effect to four devices (2026-10-11):
 
 The open-window cost is Chromium presenting the live canvas (GPU process + browser), not
 the effect engine; it disappears entirely when the window is closed.
+
+## Releases
+
+GitHub Actions does the cross-platform builds (`.github/workflows/release.yml`):
+
+1. Bump the version in `src-tauri/tauri.conf.json`, `package.json` and the workspace
+   `Cargo.toml`, commit.
+2. Tag and push: `git tag v0.1.0 && git push origin main v0.1.0`.
+3. The workflow builds Windows (NSIS), macOS (Apple Silicon and Intel DMGs) and Linux
+   (deb, rpm, AppImage) in parallel and attaches them to a **draft** release named after
+   the tag. Review it on GitHub and publish.
+
+`ci.yml` runs `npm run build` and `cargo test --workspace` on all three OSes for every
+push and pull request.
+
+Code signing is not set up. For macOS, add the `APPLE_*` secrets that
+[tauri-action](https://github.com/tauri-apps/tauri-action) documents and pass them
+through the workflow's `env:`; for Windows, a code-signing certificate can be wired into
+`bundle.windows` in the Tauri config. Until then users see the warnings listed under
+*Installing*.
