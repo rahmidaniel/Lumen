@@ -1,14 +1,25 @@
 import { create } from "zustand";
 import { frames } from "./lib/frames";
 import { getBackend, type Backend } from "./lib/ipc";
-import type { Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, Scene, Snapshot } from "./lib/types";
+import type { AppSettings, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
 
 export type Tab = "devices" | "layers" | "profiles" | "settings";
+
+export interface UpdateUi {
+  phase: "idle" | "checking" | "available" | "none" | "downloading" | "installing" | "error";
+  info: UpdateInfo | null;
+  progress: UpdateProgress | null;
+  error: string | null;
+}
+
+const NO_UPDATE: UpdateUi = { phase: "idle", info: null, progress: null, error: null };
 
 interface State {
   ready: boolean;
   snapshot: Snapshot | null;
   openrgb: OpenRgbStatus | null;
+  app: AppSettings | null;
+  update: UpdateUi;
   profiles: string[];
   tab: Tab;
   selectedLayer: string | null;
@@ -37,6 +48,9 @@ interface State {
   loadProfile(name: string): Promise<void>;
   deleteProfile(name: string): Promise<void>;
   startOpenrgb(): Promise<void>;
+  checkForUpdate(): Promise<void>;
+  installUpdate(): Promise<void>;
+  setAutoUpdate(enabled: boolean): void;
 }
 
 let backend: Backend | null = null;
@@ -73,6 +87,8 @@ export const useStore = create<State>()((set, get) => ({
   ready: false,
   snapshot: null,
   openrgb: null,
+  app: null,
+  update: NO_UPDATE,
   profiles: [],
   tab: "devices",
   selectedLayer: null,
@@ -93,12 +109,31 @@ export const useStore = create<State>()((set, get) => ({
     });
     backend.onFrame((f) => frames.push(f));
     backend.onOpenrgbStatus((openrgb) => set({ openrgb }));
-    const [snapshot, openrgb, profiles] = await Promise.all([
+    backend.onUpdateAvailable((info) => set({ update: { phase: "available", info, progress: null, error: null } }));
+    backend.onUpdateProgress((progress) =>
+      set((s) => ({
+        update: {
+          ...s.update,
+          phase: progress.total !== null && progress.downloaded >= progress.total ? "installing" : "downloading",
+          progress,
+        },
+      })),
+    );
+    const [snapshot, openrgb, profiles, app] = await Promise.all([
       backend.getSnapshot(),
       backend.openrgbStatus().catch(() => null),
       backend.listProfiles().catch(() => [] as string[]),
+      backend.appSettings().catch(() => null),
     ]);
-    set({ ready: true, snapshot, openrgb, profiles, selectedLayer: snapshot.scene.layers.at(-1)?.id ?? null });
+    set({
+      ready: true,
+      snapshot,
+      openrgb,
+      profiles,
+      app,
+      update: app?.update ? { phase: "available", info: app.update, progress: null, error: null } : NO_UPDATE,
+      selectedLayer: snapshot.scene.layers.at(-1)?.id ?? null,
+    });
   },
 
   setTab: (tab) => set({ tab }),
@@ -188,6 +223,28 @@ export const useStore = create<State>()((set, get) => ({
       fail(set)(e);
       set({ openrgb: await api().openrgbStatus().catch(() => null) });
     }
+  },
+  async checkForUpdate() {
+    set((s) => ({ update: { ...s.update, phase: "checking", error: null } }));
+    try {
+      const info = await api().checkForUpdate();
+      set({ update: info ? { phase: "available", info, progress: null, error: null } : { phase: "none", info: null, progress: null, error: null } });
+    } catch (e) {
+      set((s) => ({ update: { ...s.update, phase: "error", error: e instanceof Error ? e.message : String(e) } }));
+    }
+  },
+  async installUpdate() {
+    set((s) => ({ update: { ...s.update, phase: "downloading", progress: null, error: null } }));
+    try {
+      await api().installUpdate();
+      set((s) => ({ update: { ...s.update, phase: "installing" } }));
+    } catch (e) {
+      set((s) => ({ update: { ...s.update, phase: "error", error: e instanceof Error ? e.message : String(e) } }));
+    }
+  },
+  setAutoUpdate(enabled) {
+    set((s) => ({ app: s.app ? { ...s.app, auto_update: enabled } : s.app }));
+    api().setAutoUpdate(enabled).catch(fail(set));
   },
 }));
 

@@ -1,5 +1,5 @@
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { Power, RefreshCw } from "lucide-react";
+import { Download, Power, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge, Button, Field, Panel, Select, Toggle } from "../../components/ui";
 import { isTauri } from "../../lib/ipc";
@@ -13,6 +13,14 @@ export function SettingsPanel() {
   const refresh = useStore((s) => s.refreshDevices);
   const setFps = useStore((s) => s.setFps);
   const fps = String(snapshot?.fps ?? 60);
+  const app = useStore((s) => s.app);
+  const update = useStore((s) => s.update);
+  const checkForUpdate = useStore((s) => s.checkForUpdate);
+  const installUpdate = useStore((s) => s.installUpdate);
+  const setAutoUpdate = useStore((s) => s.setAutoUpdate);
+  const busy = update.phase === "checking" || update.phase === "downloading" || update.phase === "installing";
+  const mb = (n: number | undefined | null) => (n == null ? "…" : `${(n / 1048576).toFixed(1)} MB`);
+  const pct = update.progress?.total ? Math.min(100, Math.round((update.progress.downloaded / update.progress.total) * 100)) : 0;
 
   // Autostart lives in the OS (registry / LaunchAgent), not in our store.
   const [autostart, setAutostart] = useState<boolean | null>(null);
@@ -88,8 +96,56 @@ export function SettingsPanel() {
         </ul>
       </div>
 
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface-2 p-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">Updates</span>
+          <span className="font-mono text-[11px] text-faint">v{app?.version ?? "…"}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col">
+            <span className="text-sm">Check for updates automatically</span>
+            <span className="text-xs text-muted">Once a day, in the background. Nothing is installed until you press the button.</span>
+          </div>
+          <Toggle checked={app?.auto_update ?? true} onChange={setAutoUpdate} label="Check for updates automatically" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" disabled={busy} onClick={() => checkForUpdate()}>
+            <RefreshCw size={14} className={update.phase === "checking" ? "animate-spin" : undefined} /> {update.phase === "checking" ? "Checking…" : "Check for updates"}
+          </Button>
+          {update.phase === "none" && <span className="text-xs text-ok">You're on the latest version.</span>}
+          {update.phase === "error" && <span className="text-xs text-danger">{update.error}</span>}
+        </div>
+        {update.info && (
+          <div className="flex flex-col gap-2 rounded-md border border-accent/40 bg-accent-soft/30 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Lumen {update.info.version} is available</span>
+              {update.info.date && <span className="text-xs text-muted">{update.info.date}</span>}
+            </div>
+            {update.info.notes && <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-sans text-xs text-muted">{update.info.notes}</pre>}
+            {update.phase === "downloading" || update.phase === "installing" ? (
+              <div className="flex flex-col gap-1">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
+                  <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${update.phase === "installing" ? 100 : pct}%` }} />
+                </div>
+                <span className="text-xs text-muted">
+                  {update.phase === "installing"
+                    ? "Installing… Lumen will restart by itself."
+                    : `Downloading ${mb(update.progress?.downloaded)}${update.progress?.total ? ` of ${mb(update.progress.total)}` : ""}`}
+                </span>
+              </div>
+            ) : (
+              <div>
+                <Button variant="primary" size="sm" onClick={() => installUpdate()}>
+                  <Download size={14} /> Install and restart
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <p className="text-[11px] text-faint">
-        Lumen 0.1 · built on OpenRGB (GPL-2.0, bundled unmodified) · {isTauri ? "desktop" : "browser mock"}
+        Lumen {app?.version ?? ""} · built on OpenRGB (GPL-2.0, bundled unmodified) · {isTauri ? "desktop" : "browser mock"}
       </p>
     </Panel>
   );

@@ -638,6 +638,23 @@ export const mock: Backend = {
     delete profiles[name];
     return Object.keys(profiles).sort();
   },
+  async appSettings() {
+    return { version: "0.2.0", auto_update: true, update: null };
+  },
+  async setAutoUpdate() {},
+  async checkForUpdate() {
+    await new Promise((r) => setTimeout(r, 600));
+    return null;
+  },
+  async installUpdate() {
+    throw new Error("Updates are not available in the browser mock.");
+  },
+  onUpdateAvailable() {
+    return () => {};
+  },
+  onUpdateProgress() {
+    return () => {};
+  },
   async openrgbStatus() {
     return status();
   },

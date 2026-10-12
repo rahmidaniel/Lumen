@@ -7,6 +7,7 @@
 
 mod openrgb;
 mod sidecar;
+mod updates;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,6 +30,9 @@ const DEFAULT_FPS: u32 = 60;
 struct Settings {
     #[serde(default)]
     fps: Option<u32>,
+    /// Daily background update check (default on).
+    #[serde(default)]
+    auto_update: Option<bool>,
 }
 
 impl Settings {
@@ -175,6 +179,41 @@ async fn start_openrgb(state: State<'_, AppState>) -> CmdResult<openrgb::Status>
     state.openrgb.ensure_running().await
 }
 
+/// App-level preferences and version info for the Settings panel.
+#[derive(Clone, Serialize)]
+struct AppSettings {
+    version: String,
+    auto_update: bool,
+    /// Update found by the last check, if any.
+    update: Option<updates::UpdateInfo>,
+}
+
+#[tauri::command]
+fn app_settings(app: AppHandle, state: State<'_, AppState>) -> AppSettings {
+    AppSettings {
+        version: app.package_info().version.to_string(),
+        auto_update: state.settings.lock().unwrap().auto_update.unwrap_or(true),
+        update: app.state::<updates::UpdateState>().available(),
+    }
+}
+
+#[tauri::command]
+fn set_auto_update(state: State<'_, AppState>, enabled: bool) {
+    let mut settings = state.settings.lock().unwrap();
+    settings.auto_update = Some(enabled);
+    settings.save(&state.data_dir);
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle) -> CmdResult<Option<updates::UpdateInfo>> {
+    updates::check(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> CmdResult {
+    updates::install(&app).await
+}
+
 async fn send(engine: &EngineHandle, cmd: Command) -> CmdResult {
     if engine.send(cmd).await { Ok(()) } else { Err("engine is not running".into()) }
 }
@@ -252,7 +291,7 @@ async fn forward_snapshots(handle: AppHandle, engine: EngineHandle) {
     while rx.changed().await.is_ok() {
         let snap: Arc<Snapshot> = rx.borrow().clone();
         let _ = handle.emit("snapshot", &*snap);
-        let tip = tray_tooltip(&snap);
+        let tip = tray_tooltip(&snap, handle.state::<updates::UpdateState>().available());
         if tip != last_tip {
             if let Some(tray) = handle.tray_by_id(TRAY_ID) {
                 let _ = tray.set_tooltip(Some(&tip));
@@ -262,8 +301,11 @@ async fn forward_snapshots(handle: AppHandle, engine: EngineHandle) {
     }
 }
 
-fn tray_tooltip(snap: &Snapshot) -> String {
+fn tray_tooltip(snap: &Snapshot, update: Option<updates::UpdateInfo>) -> String {
     let mut parts = vec![if snap.connected { "Lumen".to_string() } else { "Lumen — waiting for OpenRGB".to_string() }];
+    if let Some(u) = update {
+        parts.push(format!("Update {} available — open Lumen to install", u.version));
+    }
     for d in &snap.devices {
         if let Some(b) = d.battery {
             parts.push(format!("{} {}%{}", d.display_name, b.percent, if b.charging { " (charging)" } else { "" }));
@@ -346,6 +388,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
             let dir = data_dir(&handle);
@@ -364,6 +407,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 data_dir: dir.clone(),
             });
+            app.manage(updates::UpdateState::default());
 
             // The window is configured hidden; show it unless we were launched
             // at login (autostart passes --hidden) so lighting starts silently.
@@ -389,6 +433,13 @@ pub fn run() {
             tauri::async_runtime::spawn(forward_frames(handle.clone(), engine.clone()));
             tauri::async_runtime::spawn(autosave_scene(engine.clone(), dir));
             tauri::async_runtime::spawn(sidecar::run(engine.clone()));
+            {
+                let enabled = {
+                    let h = handle.clone();
+                    move || h.state::<AppState>().settings.lock().unwrap().auto_update.unwrap_or(true)
+                };
+                tauri::async_runtime::spawn(updates::auto_check(handle.clone(), enabled));
+            }
 
             setup_tray(&handle)?;
             Ok(())
@@ -409,6 +460,10 @@ pub fn run() {
             delete_profile,
             openrgb_status,
             start_openrgb,
+            app_settings,
+            set_auto_update,
+            check_for_update,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Lumen");

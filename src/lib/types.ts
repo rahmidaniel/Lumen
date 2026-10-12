@@ -167,3 +167,21 @@ export interface OpenRgbStatus {
   server_reachable: boolean;
   started_by_lumen: boolean;
 }
+
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+  date: string | null;
+}
+
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+}
+
+export interface AppSettings {
+  version: string;
+  auto_update: boolean;
+  update: UpdateInfo | null;
+}

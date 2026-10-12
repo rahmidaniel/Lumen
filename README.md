@@ -114,6 +114,22 @@ build while streaming a 60 fps effect to four devices (2026-10-11):
 The open-window cost is Chromium presenting the live canvas (GPU process + browser), not
 the effect engine; it disappears entirely when the window is closed.
 
+## Updates
+
+Lumen checks GitHub Releases for newer versions: on demand from Settings → Updates, and
+once a day in the background (switchable off there). Nothing is installed until you press
+*Install and restart*. The release workflow signs every installer with the project's updater
+key and attaches a `latest.json` manifest to the release; the app verifies the signature
+against the public key in `src-tauri/tauri.conf.json` before installing, then restarts.
+
+The private key lives outside the repository: `~/.tauri/lumen.key` on the maintainer's
+machine (a local `tauri build` reads it through `TAURI_SIGNING_PRIVATE_KEY`) and the
+`TAURI_SIGNING_PRIVATE_KEY` secret in GitHub Actions. Losing it means existing installs can
+no longer verify updates, so keep a backup. The feed URL
+`https://github.com/rahmidaniel/lumen/releases/latest/download/latest.json` is only served
+by GitHub for public repositories, so the repository has to be public for updates to reach
+users.
+
 ## Releases
 
 GitHub Actions does the cross-platform builds (`.github/workflows/release.yml`):

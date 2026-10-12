@@ -3,7 +3,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { FramePayload, Layer, Layout, OnboardEffect, OpenRgbStatus, Scene, Snapshot } from "./types";
+import type { AppSettings, FramePayload, Layer, Layout, OnboardEffect, OpenRgbStatus, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./types";
 
 export interface Backend {
   getSnapshot(): Promise<Snapshot>;
@@ -22,9 +22,17 @@ export interface Backend {
   deleteProfile(name: string): Promise<string[]>;
   openrgbStatus(): Promise<OpenRgbStatus>;
   startOpenrgb(): Promise<OpenRgbStatus>;
+  appSettings(): Promise<AppSettings>;
+  setAutoUpdate(enabled: boolean): Promise<void>;
+  /** Ask the release feed; `null` means this is the latest version. */
+  checkForUpdate(): Promise<UpdateInfo | null>;
+  /** Download, verify and install the update found by the last check, then restart. */
+  installUpdate(): Promise<void>;
   onSnapshot(cb: (s: Snapshot) => void): () => void;
   onFrame(cb: (f: FramePayload) => void): () => void;
   onOpenrgbStatus(cb: (s: OpenRgbStatus) => void): () => void;
+  onUpdateAvailable(cb: (u: UpdateInfo) => void): () => void;
+  onUpdateProgress(cb: (p: UpdateProgress) => void): () => void;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -52,9 +60,15 @@ const tauriBackend: Backend = {
   deleteProfile: (name) => invoke<string[]>("delete_profile", { name }),
   openrgbStatus: () => invoke<OpenRgbStatus>("openrgb_status"),
   startOpenrgb: () => invoke<OpenRgbStatus>("start_openrgb"),
+  appSettings: () => invoke<AppSettings>("app_settings"),
+  setAutoUpdate: (enabled) => invoke("set_auto_update", { enabled }),
+  checkForUpdate: () => invoke<UpdateInfo | null>("check_for_update"),
+  installUpdate: () => invoke("install_update"),
   onSnapshot: (cb) => subscribe<Snapshot>("snapshot", cb),
   onFrame: (cb) => subscribe<FramePayload>("frame", cb),
   onOpenrgbStatus: (cb) => subscribe<OpenRgbStatus>("openrgb_status", cb),
+  onUpdateAvailable: (cb) => subscribe<UpdateInfo>("update_available", cb),
+  onUpdateProgress: (cb) => subscribe<UpdateProgress>("update_progress", cb),
 };
 
 let backendImpl: Backend | null = isTauri ? tauriBackend : null;

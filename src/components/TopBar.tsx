@@ -36,6 +36,7 @@ export function TopBar() {
   const setBrightness = useStore((s) => s.setBrightness);
   const setPaused = useStore((s) => s.setPaused);
 
+  const update = useStore((s) => s.update.info);
   const connected = snapshot?.connected ?? false;
   const paused = snapshot?.paused ?? false;
   const brightness = snapshot?.scene.brightness ?? 1;
@@ -61,6 +62,11 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-4">
+        {update && (
+          <button onClick={() => setTab("settings")} title={`Lumen ${update.version} is available — open Settings to install`}>
+            <Badge tone="accent">Update {update.version}</Badge>
+          </button>
+        )}
         <Badge tone={status.tone}>
           <span className={cx("h-1.5 w-1.5 rounded-full", status.tone === "ok" ? "bg-ok" : status.tone === "warn" ? "bg-warn animate-pulse" : "bg-danger")} />
           {status.text}
