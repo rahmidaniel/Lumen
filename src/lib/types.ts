@@ -113,13 +113,21 @@ export interface Stop {
 
 export type Palette = { type: "rainbow" } | { type: "stops"; stops: Stop[] };
 
+/** One colour on a set of LEDs of one device (LED indices in OpenRGB order). */
+export interface PaintStroke {
+  device: number;
+  leds: number[];
+  color: Rgb;
+}
+
 export type Effect =
   | { type: "static"; color: Rgb }
   | { type: "gradient"; stops: Stop[]; angle: number }
   | { type: "spectrum"; speed: number }
   | { type: "wave"; angle: number; speed: number; wavelength: number; palette: Palette }
   | { type: "breathing"; color: Rgb; speed: number }
-  | { type: "starlight"; color: Rgb; density: number; speed: number };
+  | { type: "starlight"; color: Rgb; density: number; speed: number }
+  | { type: "paint"; strokes: PaintStroke[] };
 
 export type EffectType = Effect["type"];
 

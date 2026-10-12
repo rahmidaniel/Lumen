@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Eraser, Plus, X } from "lucide-react";
 import { Button, ColorInput, Field, IconButton, Select, Slider, TextInput, cx } from "../../components/ui";
 import type { BlendMode, DeviceInfo, Effect, EffectType, Layer, Palette, Stop } from "../../lib/types";
 import { useStore } from "../../store";
@@ -12,6 +12,7 @@ export const effectLabels: Record<EffectType, string> = {
   wave: "Wave",
   breathing: "Breathing",
   starlight: "Starlight",
+  paint: "Paint keys",
 };
 
 export function defaultEffect(type: EffectType): Effect {
@@ -35,6 +36,8 @@ export function defaultEffect(type: EffectType): Effect {
       return { type, color: { r: 0.55, g: 0.42, b: 1 }, speed: 0.25 };
     case "starlight":
       return { type, color: { r: 1, g: 1, b: 1 }, density: 0.15, speed: 0.6 };
+    case "paint":
+      return { type, strokes: [] };
   }
 }
 
@@ -107,8 +110,33 @@ function PaletteEditor({ palette, onChange }: { palette: Palette; onChange: (p: 
   );
 }
 
+/** Brush for a paint layer: the colour lives in the store so the canvas can use it. */
+function PaintParams({ effect, onChange }: { effect: Extract<Effect, { type: "paint" }>; onChange: (e: Effect) => void }) {
+  const color = useStore((s) => s.paintColor);
+  const setColor = useStore((s) => s.setPaintColor);
+  const painted = effect.strokes.reduce((n, s) => n + s.leds.length, 0);
+  return (
+    <>
+      <Field label="Brush colour">
+        <ColorInput value={color} onChange={setColor} />
+      </Field>
+      <p className="text-xs text-muted">
+        With this layer selected, click or drag across keys and LEDs on the canvas to paint them. Hold Shift to erase. Keys you leave alone keep showing the layers below.
+      </p>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-faint">{painted === 0 ? "Nothing painted yet." : `${painted} LED${painted === 1 ? "" : "s"} painted`}</span>
+        <Button size="sm" variant="ghost" disabled={painted === 0} onClick={() => onChange({ type: "paint", strokes: [] })}>
+          <Eraser size={14} /> Clear all
+        </Button>
+      </div>
+    </>
+  );
+}
+
 function EffectParams({ effect, onChange }: { effect: Effect; onChange: (e: Effect) => void }) {
   switch (effect.type) {
+    case "paint":
+      return <PaintParams effect={effect} onChange={onChange} />;
     case "static":
       return (
         <Field label="Colour">

@@ -300,10 +300,10 @@ function drawGlowGlyph(ctx: CanvasRenderingContext2D, led: LedGlyph, c: Rgb) {
     ctx.fill();
     return;
   }
-  for (const [inflate, alpha] of [
-    [2.1, 0.09],
-    [1.45, 0.17],
-  ] as const) {
+  // Keycaps get one tight halo so neighbours stay distinct; dots and strips
+  // are small light sources and may bloom further.
+  const passes: readonly (readonly [number, number])[] = g.type === "key" || g.type === "cell" || g.type === "iso_enter" ? [[1.22, 0.16]] : [[2.1, 0.09], [1.45, 0.17]];
+  for (const [inflate, alpha] of passes) {
     if (g.type === "strip") {
       // Butt caps so neighbouring segments don't double up into bright beads;
       // extend the path a little into the gap between segments so it stays seamless.
@@ -433,7 +433,45 @@ function drawScene(
 
 type Drag =
   | { kind: "device"; id: number; start: Placement; sx: number; sy: number }
-  | { kind: "pan"; from: Transform; sx: number; sy: number };
+  | { kind: "pan"; from: Transform; sx: number; sy: number }
+  | { kind: "paint"; erase: boolean; done: Set<string> };
+
+/** Distance from a point to a polyline. */
+function distanceToPolyline(x: number, y: number, pts: [number, number][]): number {
+  let best = Infinity;
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, ay] = pts[i - 1];
+    const [bx, by] = pts[i];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1;
+    const t = Math.min(1, Math.max(0, ((x - ax) * dx + (y - ay) * dy) / len2));
+    best = Math.min(best, Math.hypot(x - (ax + dx * t), y - (ay + dy * t)));
+  }
+  return best;
+}
+
+/** The LED glyph under a device-local point, if any. */
+function ledAt(g: DeviceGeometry, lx: number, ly: number): LedGlyph | null {
+  for (let i = g.leds.length - 1; i >= 0; i--) {
+    const led = g.leds[i];
+    const gl = led.glyph;
+    switch (gl.type) {
+      case "key":
+      case "cell":
+      case "iso_enter":
+        if (Math.abs(lx - led.x) <= gl.w / 2 && Math.abs(ly - led.y) <= gl.h / 2) return led;
+        break;
+      case "dot":
+        if (Math.hypot(lx - led.x, ly - led.y) <= Math.max(gl.r * 1.6, 4)) return led;
+        break;
+      case "strip":
+        if (distanceToPolyline(lx, ly, gl.points) <= Math.max(gl.width, 4)) return led;
+        break;
+    }
+  }
+  return null;
+}
 
 export function CanvasStage() {
   const snapshot = useStore((s) => s.snapshot);
@@ -442,6 +480,21 @@ export function CanvasStage() {
   const selected = useStore((s) => s.selectedDevice);
   const selectDevice = useStore((s) => s.selectDevice);
   const setPlacement = useStore((s) => s.setPlacement);
+  const selectLayer = useStore((s) => s.selectLayer);
+  const paintColor = useStore((s) => s.paintColor);
+  const paintLeds = useStore((s) => s.paintLeds);
+  // Painting: with a paint layer selected on the Effects tab, clicks colour LEDs instead of moving devices.
+  const paintLayer = useStore((s) => (s.tab === "layers" ? (s.snapshot?.scene.layers.find((l) => l.id === s.selectedLayer && l.effect.type === "paint") ?? null) : null));
+  const paintRef = useRef({ layer: paintLayer, color: paintColor });
+  paintRef.current = { layer: paintLayer, color: paintColor };
+  useEffect(() => {
+    if (!paintLayer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") selectLayer(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [paintLayer, selectLayer]);
   const [ref, size] = useSize<HTMLDivElement>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -589,12 +642,38 @@ export function CanvasStage() {
     return null;
   };
 
+  /** LED under a screen point: device, LED index, and a key for de-duplication. */
+  const pickLed = (sx: number, sy: number): { device: number; led: number; key: string } | null => {
+    const id = pick(sx, sy);
+    if (id === null) return null;
+    const t = current();
+    const p = stateRef.current.placements[String(id)];
+    const g = stateRef.current.geometry.find((x) => x.device === id);
+    if (!p || !g) return null;
+    const [lx, ly] = toLocal(p, (sx - t.tx) / t.s, (sy - t.ty) / t.s);
+    const led = ledAt(g, lx, ly);
+    return led ? { device: id, led: led.led, key: `${id}:${led.led}` } : null;
+  };
+  const paintAt = (sx: number, sy: number, d: Extract<Drag, { kind: "paint" }>) => {
+    const hit = pickLed(sx, sy);
+    const layer = paintRef.current.layer;
+    if (!hit || !layer || d.done.has(hit.key)) return;
+    d.done.add(hit.key);
+    paintLeds(layer.id, hit.device, [hit.led], d.erase ? null : paintRef.current.color);
+  };
+
   const drag = useRef<Drag | null>(null);
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.button !== 1) return;
     const [sx, sy] = localPoint(e);
-    const id = e.button === 0 ? pick(sx, sy) : null;
     e.currentTarget.setPointerCapture(e.pointerId);
+    if (e.button === 0 && paintRef.current.layer) {
+      const d: Drag = { kind: "paint", erase: e.shiftKey, done: new Set() };
+      drag.current = d;
+      paintAt(sx, sy, d);
+      return;
+    }
+    const id = e.button === 0 ? pick(sx, sy) : null;
     if (id !== null) {
       drag.current = { kind: "device", id, start: stateRef.current.placements[String(id)], sx, sy };
       selectDevice(id);
@@ -607,12 +686,20 @@ export function CanvasStage() {
     const [sx, sy] = localPoint(e);
     const d = drag.current;
     if (!d) {
+      if (paintRef.current.layer) {
+        e.currentTarget.style.cursor = pickLed(sx, sy) ? "crosshair" : "default";
+        return;
+      }
       const id = pick(sx, sy);
       if (id !== hoverRef.current) {
         hoverRef.current = id;
         dirtyRef.current = true;
       }
       e.currentTarget.style.cursor = id !== null ? "grab" : "default";
+      return;
+    }
+    if (d.kind === "paint") {
+      paintAt(sx, sy, d);
       return;
     }
     dirtyRef.current = true;
@@ -654,6 +741,14 @@ export function CanvasStage() {
           <p className="text-sm text-muted">
             {problem ?? (openrgb && !openrgb.exe ? "OpenRGB isn't installed. Install it, then press Start OpenRGB in Settings." : "Waiting for OpenRGB to report your devices…")}
           </p>
+        </div>
+      )}
+
+      {paintLayer && !empty && (
+        <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-lg border border-accent/40 bg-surface/90 px-3 py-1.5 text-xs backdrop-blur">
+          <span className="h-2.5 w-2.5 rounded-full border border-white/30" style={{ background: `rgb(${Math.round(paintColor.r * 255)} ${Math.round(paintColor.g * 255)} ${Math.round(paintColor.b * 255)})` }} />
+          <span className="text-text">Painting “{paintLayer.name}”</span>
+          <span className="text-muted">click or drag across keys · Shift erases · Esc to stop</span>
         </div>
       )}
 

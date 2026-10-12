@@ -132,6 +132,14 @@ fn wrap_lerp(last: Stop, first: Stop, t: f32) -> Rgb {
     Rgb::lerp(last.color, first.color, ((t - last.pos) / span).clamp(0.0, 1.0))
 }
 
+/// One colour on a set of LEDs of one device (LED indices in OpenRGB order).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PaintStroke {
+    pub device: u32,
+    pub leds: Vec<u32>,
+    pub color: Rgb,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Effect {
@@ -153,6 +161,9 @@ pub enum Effect {
     /// Random LEDs twinkle. `density` 0..1 is the share of LEDs lit per cycle,
     /// `speed` is twinkles per second per LED.
     Starlight { color: Rgb, density: f32, speed: f32 },
+    /// Hand-picked colours for individual LEDs (painted on the canvas); LEDs
+    /// not listed stay transparent, so layers below show through them.
+    Paint { strokes: Vec<PaintStroke> },
 }
 
 /// Inputs for one LED sample.
@@ -164,6 +175,9 @@ pub struct SampleCtx {
     pub t: f64,
     /// Stable per-LED hash, for effects that need randomness.
     pub seed: u32,
+    /// Which LED is being sampled (OpenRGB controller ID and LED index).
+    pub device: u32,
+    pub led: u32,
 }
 
 impl Effect {
@@ -171,7 +185,7 @@ impl Effect {
     /// and the engine idles until something edits the scene.
     pub fn is_animated(&self) -> bool {
         match self {
-            Effect::Static { .. } | Effect::Gradient { .. } => false,
+            Effect::Static { .. } | Effect::Gradient { .. } | Effect::Paint { .. } => false,
             Effect::Spectrum { speed } | Effect::Wave { speed, .. } | Effect::Breathing { speed, .. } => *speed != 0.0,
             Effect::Starlight { .. } => true,
         }
@@ -198,6 +212,12 @@ impl Effect {
                 let k = 0.5 - 0.5 * (TAU * ctx.t * *speed as f64).cos();
                 Rgba::opaque(color.scale(k as f32))
             }
+            Effect::Paint { strokes } => strokes
+                .iter()
+                .rev()
+                .find(|s| s.device == ctx.device && s.leds.contains(&ctx.led))
+                .map(|s| Rgba::opaque(s.color))
+                .unwrap_or(Rgba::TRANSPARENT),
             Effect::Starlight { color, density, speed } => {
                 let cycle_len = 1.0 / (*speed as f64).max(1e-3);
                 let local = ctx.t + hash01(ctx.seed) as f64 * cycle_len;
@@ -236,7 +256,25 @@ mod tests {
     use super::*;
 
     fn ctx(u: f32, v: f32, t: f64) -> SampleCtx {
-        SampleCtx { u, v, t, seed: 42 }
+        SampleCtx { u, v, t, seed: 42, device: 0, led: 0 }
+    }
+
+    #[test]
+    fn paint_colours_only_the_listed_leds_and_last_stroke_wins() {
+        let red = Rgb { r: 1.0, g: 0.0, b: 0.0 };
+        let blue = Rgb { r: 0.0, g: 0.0, b: 1.0 };
+        let e = Effect::Paint {
+            strokes: vec![
+                PaintStroke { device: 7, leds: vec![1, 2, 3], color: red },
+                PaintStroke { device: 7, leds: vec![3], color: blue },
+            ],
+        };
+        assert!(!e.is_animated());
+        let at = |device, led| e.sample(&SampleCtx { u: 0.0, v: 0.0, t: 0.0, seed: 0, device, led });
+        assert_eq!(at(7, 1), Rgba::opaque(red));
+        assert_eq!(at(7, 3), Rgba::opaque(blue), "the later stroke overrides");
+        assert_eq!(at(7, 4).a, 0.0, "unpainted LEDs are transparent");
+        assert_eq!(at(8, 1).a, 0.0, "other devices are untouched");
     }
 
     #[test]
@@ -282,7 +320,7 @@ mod tests {
         let never = Effect::Starlight { color: Rgb::WHITE, density: 0.0, speed: 1.0 };
         let always = Effect::Starlight { color: Rgb::WHITE, density: 1.0, speed: 1.0 };
         for seed in 0..50u32 {
-            let c = SampleCtx { u: 0.0, v: 0.0, t: 0.3, seed };
+            let c = SampleCtx { u: 0.0, v: 0.0, t: 0.3, seed, device: 0, led: 0 };
             assert_eq!(never.sample(&c).a, 0.0);
             assert!(always.sample(&c).a > 0.0);
         }

@@ -3,7 +3,7 @@
 Cross-platform RGB lighting studio built on OpenRGB. One canvas, every device, in sync.
 
 - **OpenRGB** does device I/O (headless, SDK protocol v6).
-- **Lumen** does the rest: a Chroma-Studio-style virtual canvas, layered effects, profiles,
+- **Lumen** does the rest: a Chroma-Studio-style virtual canvas, layered effects, per-key painting, profiles,
   battery status, save-to-device where hardware allows, and a UI that stays smooth.
 
 See [`docs/PLAN.md`](docs/PLAN.md) for architecture and milestones, and

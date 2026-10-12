@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { frames } from "./lib/frames";
 import { getBackend, type Backend } from "./lib/ipc";
-import type { AppSettings, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
+import type { AppSettings, Effect, Layer, OnboardEffect, OpenRgbStatus, Placement, Rgb, Scene, Snapshot, UpdateInfo, UpdateProgress } from "./lib/types";
 
 export type Tab = "devices" | "layers" | "profiles" | "settings";
 
@@ -27,6 +27,8 @@ interface State {
   selectedLayer: string | null;
   selectedDevice: number | null;
   error: string | null;
+  /** Brush colour for paint layers. */
+  paintColor: Rgb;
 
   init(): Promise<void>;
   setTab(tab: Tab): void;
@@ -41,6 +43,9 @@ interface State {
 
   /** Update a device's placement; `commit` false while dragging (throttled), true on release. */
   setPlacement(deviceId: number, placement: Placement, commit: boolean): void;
+  setPaintColor(color: Rgb): void;
+  /** Paint (`color`) or erase (`null`) LEDs of one device in a paint layer. */
+  paintLeds(layerId: string, device: number, leds: number[], color: Rgb | null): void;
   setBrightness(brightness: number): void;
   setPaused(paused: boolean): void;
   setFps(fps: number): void;
@@ -100,6 +105,7 @@ export const useStore = create<State>()((set, get) => ({
   selectedLayer: null,
   selectedDevice: null,
   error: null,
+  paintColor: { r: 0.55, g: 0.42, b: 1 },
 
   async init() {
     if (get().ready) return;
@@ -190,6 +196,21 @@ export const useStore = create<State>()((set, get) => ({
       return { ...scene, layout };
     });
     if (layout) pushLayout(layout, commit, fail(set));
+  },
+  setPaintColor: (paintColor) => set({ paintColor }),
+  paintLeds(layerId, device, leds, color) {
+    const layer = get().snapshot?.scene.layers.find((l) => l.id === layerId);
+    if (!layer || layer.effect.type !== "paint" || leds.length === 0) return;
+    const gone = new Set(leds);
+    let strokes = layer.effect.strokes
+      .map((s) => (s.device === device ? { ...s, leds: s.leds.filter((l) => !gone.has(l)) } : s))
+      .filter((s) => s.leds.length > 0);
+    if (color) {
+      const same = (a: Rgb, b: Rgb) => Math.abs(a.r - b.r) < 1e-6 && Math.abs(a.g - b.g) < 1e-6 && Math.abs(a.b - b.b) < 1e-6;
+      const i = strokes.findIndex((s) => s.device === device && same(s.color, color));
+      strokes = i >= 0 ? strokes.map((s, j) => (j === i ? { ...s, leds: [...s.leds, ...leds] } : s)) : [...strokes, { device, leds: [...leds], color }];
+    }
+    get().patchLayer(layerId, { effect: { type: "paint", strokes } });
   },
   setBrightness(brightness) {
     withScene(set, (scene) => ({ ...scene, brightness }));

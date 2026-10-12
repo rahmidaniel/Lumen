@@ -460,10 +460,17 @@ function samplePalette(p: Palette, t: number): Rgb {
   return p.type === "rainbow" ? hsv(t, 1, 1) : sampleStops(p.stops, fract(t), true);
 }
 
-function sampleEffect(e: Effect, u: number, v: number, t: number, seed: number): [Rgb, number] {
+function sampleEffect(e: Effect, u: number, v: number, t: number, seed: number, device: number, led: number): [Rgb, number] {
   switch (e.type) {
     case "static":
       return [e.color, 1];
+    case "paint": {
+      for (let i = e.strokes.length - 1; i >= 0; i--) {
+        const s = e.strokes[i];
+        if (s.device === device && s.leds.includes(led)) return [s.color, 1];
+      }
+      return [{ r: 0, g: 0, b: 0 }, 0];
+    }
     case "gradient":
       return [sampleStops(e.stops, Math.min(1, Math.max(0, project(u, v, e.angle))), false), 1];
     case "spectrum":
@@ -523,7 +530,7 @@ function renderFrame(scene: Scene, points: LedPoint[], t: number): FramePayload 
     let c: Rgb = { r: 0, g: 0, b: 0 };
     for (const layer of layers) {
       if (!maskIncludes(layer, p)) continue;
-      const [s, a] = sampleEffect(layer.effect, p.u, p.v, t, seed);
+      const [s, a] = sampleEffect(layer.effect, p.u, p.v, t, seed, p.device, p.led);
       c = blend(c, s, a * layer.opacity, layer.blend);
     }
     const buf = buffers.get(p.device)!;

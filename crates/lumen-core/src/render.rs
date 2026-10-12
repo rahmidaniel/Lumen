@@ -49,7 +49,7 @@ impl Renderer {
 
         let layers: Vec<_> = scene.layers.iter().filter(|l| l.enabled && l.opacity > 0.0).collect();
         for (p, &seed) in self.points.iter().zip(&self.seeds) {
-            let ctx = SampleCtx { u: p.u, v: p.v, t, seed };
+            let ctx = SampleCtx { u: p.u, v: p.v, t, seed, device: p.device, led: p.led as u32 };
             let mut c = Rgb::BLACK;
             for layer in &layers {
                 if layer.mask.includes(p) {
