@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Lumen",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "identifier": "dev.lumen.studio",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -58,7 +58,8 @@
     "licenseFile": "packaging/installer-license.txt",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "packaging/windows/installer-hooks.nsh"
       }
     }
   }

@@ -4,6 +4,21 @@ All notable changes to Lumen. Installers are on the
 [releases page](https://github.com/rahmidaniel/lumen/releases); from 0.2.1 on, Lumen
 updates itself from Settings → Updates.
 
+## 0.3.3 — 2026-10-18
+
+Updates on Windows no longer get stuck on Lumen's own copy of OpenRGB.
+
+### Fixed
+
+- **Updating on Windows stopped with "Error opening file for writing … OpenRGB.exe"**
+  when Lumen ran OpenRGB itself, which it does unless *Let Lumen manage OpenRGB* is on.
+  That OpenRGB kept running after Lumen quit for the update, so its files could not be
+  replaced. The installer now ends it first, and also steps around a Windows service
+  that briefly holds a program's file just after it exits. OpenRGB installed elsewhere
+  and Lumen's OpenRGB service are left alone.
+- Uninstalling while that OpenRGB ran left it running and its folder behind. The
+  uninstaller now ends it too.
+
 ## 0.3.2 — 2026-10-18
 
 Lumen now runs only once: opening it again brings back the copy that is already running.

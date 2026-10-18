@@ -46,6 +46,18 @@ exit, and never starts a helper program then (Windows refuses to start programs 
 shutdown). Services, ports and processes are queried through the Windows API for the
 same reason.
 
+The OpenRGB Lumen starts on Windows runs from the install folder (`openrgb\`) and
+outlives a Lumen that quits to install an update. So the installer closes Lumen, then
+ends that copy before it replaces the files, and the uninstaller does the same before it
+removes them (`src-tauri/packaging/windows/installer-hooks.nsh`). Both go through the
+Restart Manager by file path, so an OpenRGB installed elsewhere and the service's copy
+in `Program Files` are left alone. One more obstacle: a second or two after a program
+exits, Windows' Inventory and Compatibility Appraisal service opens its file for a moment
+without sharing write access (it did after every one of 16 test runs), and an update
+whose copy landed in that moment failed (4 of 32 test updates). The hook therefore also
+moves `OpenRGB.exe` aside, which that service allows, so the installer writes a new file
+instead of overwriting the old one (20 of 20 test updates went through).
+
 ## Keeping up while the PC is busy
 
 Lumen streams frames at up to 60 fps, and every device has to get each frame on time
