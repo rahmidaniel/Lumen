@@ -1,0 +1,39 @@
+# Submits every published release to the Windows Package Manager: opens a pull
+# request to microsoft/winget-pkgs, from the rahmidaniel/winget-pkgs fork, that
+# adds the new version of `rahmidaniel.Lumen` with the release's x64 installer.
+#
+# Needs the WINGET_TOKEN secret: a classic personal access token with the
+# `public_repo` and `workflow` scopes (fine-grained tokens don't work; `workflow`
+# lets the action keep the fork in sync). Without it the job only warns. See
+# docs/releasing.md.
+name: WinGet
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to submit, e.g. v0.3.2
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: Check for the WINGET_TOKEN secret
+        if: env.WINGET_TOKEN == ''
+        run: echo "::warning::WINGET_TOKEN is not set, so this release was not submitted to winget (see docs/releasing.md)."
+
+      - uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # main, 2026-10-07
+        if: env.WINGET_TOKEN != ''
+        with:
+          identifier: rahmidaniel.Lumen
+          installers-regex: '_x64-setup\.exe$'
+          release-tag: ${{ inputs.tag || github.event.release.tag_name }}
+          token: ${{ secrets.WINGET_TOKEN }}

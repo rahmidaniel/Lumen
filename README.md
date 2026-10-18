@@ -24,8 +24,9 @@
 Razer has Synapse, Logitech has G HUB, Corsair has iCUE, SteelSeries has GG, ASUS has
 Armoury Crate, HyperX has NGENUITY, Glorious has CORE. Each one is a separate download,
 a separate background service, and a separate idea of what "sync" means. Lumen replaces
-the lot with a single small, cross-platform app: one canvas where every device lights up
-together, and one place to see battery levels and manage devices.
+the lot with a single small, open-source app for Windows, macOS and Linux: one canvas
+where every device lights up together, and one place to see battery levels and manage
+devices.
 
 ## What it does
 
@@ -149,6 +150,24 @@ sleep timer on Razer devices and the HyperX Pulsefire Haste 2), yes. Lumen does 
 buttons, record macros or update firmware yet, so keep a vendor app around if you need
 those, but quit it (and stop it starting with your PC) while Lumen runs: two programs
 driving the same LEDs make them flicker between both.
+</details>
+
+<details>
+<summary><b>How is Lumen different from OpenRGB, SignalRGB or Artemis?</b></summary>
+
+- **OpenRGB** is the engine Lumen is built on: it talks to the hardware, and Lumen ships
+  it, runs it and restarts it for you. On top of it Lumen adds one canvas across all your
+  devices, layered effects, battery levels, device settings such as DPI and polling rate,
+  and boot lighting on Razer devices.
+- **SignalRGB** has a large effects library and game integrations, but it is closed
+  source and Windows-only, and its game integrations, audio-reactive effects and fan
+  control need the paid Pro tier.
+- **Artemis** is a deep, plugin-based lighting editor for Windows and Linux. It reaches
+  many brands through their vendors' own SDKs, which need the vendor app running, or
+  through OpenRGB.
+
+Lumen's aim is narrower: replace the vendor apps with one small app. It doesn't react to
+games or music yet; if you need that today, SignalRGB and Artemis do it.
 </details>
 
 <details>

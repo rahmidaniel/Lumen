@@ -23,6 +23,23 @@ with Codeberg as the fallback; Codeberg has refused automated downloads before.
 `ci.yml` runs `npm run build` and `cargo test --workspace` on all three OSes for every
 push and pull request.
 
+## winget
+
+Lumen's Windows Package Manager package is `rahmidaniel.Lumen` (moniker `lumen-rgb`). The
+first version, 0.3.1, was submitted by hand in
+[winget-pkgs#455465](https://github.com/microsoft/winget-pkgs/pull/455465). From then on
+`winget.yml` runs when a release is published and opens a pull request to
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) from the
+`rahmidaniel/winget-pkgs` fork, using the previous version's manifest as the template;
+winget's validation pipeline installs it on a test machine before the pull request is
+merged. The action needs at least one version already merged, so it can't run before that.
+
+The workflow needs the `WINGET_TOKEN` secret: a classic personal access token with the
+`public_repo` and `workflow` scopes (fine-grained tokens don't work). Without it the job
+only leaves a warning. If a submission fails, re-run it from the Actions tab with the
+release tag, or submit by hand with [Komac](https://github.com/russellbanks/Komac):
+`komac update rahmidaniel.Lumen --version X.Y.Z --urls <x64-setup.exe URL> --submit`.
+
 ## Updater signing
 
 Lumen checks GitHub Releases for newer versions: on demand from Settings → Updates, and
