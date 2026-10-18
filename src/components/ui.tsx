@@ -116,20 +116,29 @@ export function Slider({ label, value, min, max, step = 0.01, onChange, format }
   );
 }
 
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: string }) {
+/** An on/off switch. Fixed size: it never gives up width to long text beside it. */
+export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(
-        "relative h-5 w-9 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
-        checked ? "bg-accent" : "bg-border-strong",
+        "inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors duration-150",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface-2",
+        "disabled:cursor-not-allowed",
+        checked ? "bg-accent hover:brightness-110" : "bg-surface-3 inset-ring inset-ring-border-strong hover:bg-border",
       )}
     >
-      <span className={cx("absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform", checked ? "translate-x-4.5" : "translate-x-0.5")} />
+      <span
+        className={cx(
+          "pointer-events-none block h-4 w-4 rounded-full shadow-[0_1px_2px_rgb(0_0_0/0.4)] transition-[translate,background-color] duration-150 ease-out",
+          checked ? "translate-x-4 bg-white" : "translate-x-0 bg-muted",
+        )}
+      />
     </button>
   );
 }

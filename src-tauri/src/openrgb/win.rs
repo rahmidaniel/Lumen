@@ -14,6 +14,11 @@
 //! the per-user install folder; any program of the user's could swap that
 //! executable. It is still recognised (and used) until the user switches over,
 //! which removes it.
+//!
+//! Services, ports and processes are queried through the Windows API rather
+//! than `sc.exe` and friends: Lumen checks them often, and Windows refuses to
+//! start new programs while it shuts down, which is exactly when Lumen stops
+//! its service ("sc.exe - Application Error 0xc0000142").
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -26,12 +31,18 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const NAME: &str = "LumenOpenRGB";
 /// OpenRGB's own service.
 const OPENRGB_SERVICE: &str = "OpenRGB";
+/// Priority class the adopt step gives OpenRGB (`ABOVE_NORMAL_PRIORITY_CLASS`
+/// in Image File Execution Options terms), so its device threads keep up when
+/// the PC is busy.
+const OPENRGB_PRIORITY: u32 = 6;
+const IFEO_PERF_OPTIONS: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\OpenRGB.exe\PerfOptions";
 const COMMON_SCRIPT: &str = include_str!("../../packaging/windows/openrgb-common.ps1");
 const ADOPT_SCRIPT: &str = include_str!("../../packaging/windows/openrgb-adopt.ps1");
 const RELEASE_SCRIPT: &str = include_str!("../../packaging/windows/openrgb-release.ps1");
 const STOP_SCRIPT: &str = include_str!("../../packaging/windows/openrgb-stop.ps1");
 
 /// Run a console program without a window; `(exit code, stdout + stderr)`.
+/// Only Lumen 0.2's scheduled task still needs one (`schtasks.exe`).
 fn run(program: &str, args: &[&str]) -> Result<(i32, String), String> {
     let out = Command::new(program)
         .args(args)
@@ -44,7 +55,7 @@ fn run(program: &str, args: &[&str]) -> Result<(i32, String), String> {
     Ok((out.status.code().unwrap_or(-1), text))
 }
 
-/// A service's run state, from `sc query`.
+/// A service's run state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SvcState {
     Stopped,
@@ -54,71 +65,199 @@ pub enum SvcState {
     Other,
 }
 
-fn parse_state(query: &str) -> SvcState {
-    let Some(line) = query.lines().find(|l| l.trim_start().starts_with("STATE")) else { return SvcState::Other };
-    if line.contains("STOP_PENDING") {
-        SvcState::StopPending
-    } else if line.contains("START_PENDING") {
-        SvcState::StartPending
-    } else if line.contains("RUNNING") {
-        SvcState::Running
-    } else if line.contains("STOPPED") {
-        SvcState::Stopped
-    } else {
-        SvcState::Other
-    }
-}
-
-fn svc_state_of(name: &str) -> Option<SvcState> {
-    match run("sc.exe", &["query", name]).ok()? {
-        (0, query) => Some(parse_state(&query)),
-        _ => None, // 1060: no such service
-    }
-}
-
 /// State of OpenRGB's own service; `None` when it is not installed.
 pub fn service() -> Option<ServiceInfo> {
-    let state = svc_state_of(OPENRGB_SERVICE)?;
-    let disabled = run("sc.exe", &["qc", OPENRGB_SERVICE]).map(|(_, qc)| qc.contains("DISABLED")).unwrap_or(false);
+    let state = scm::state(OPENRGB_SERVICE)?;
+    let disabled = scm::config(OPENRGB_SERVICE).is_some_and(|c| c.disabled);
     Some(ServiceInfo { running: state == SvcState::Running, disabled })
 }
 
 /// State of Lumen's own service; `None` when it is not installed.
 pub fn lumen_service() -> Option<SvcState> {
-    svc_state_of(NAME)
+    scm::state(NAME)
 }
 
 /// The executable Lumen's service runs, from its configuration.
 pub fn lumen_service_binary() -> Option<String> {
-    let (code, qc) = run("sc.exe", &["qc", NAME]).ok()?;
-    if code != 0 {
-        return None;
+    scm::config(NAME).map(|c| executable_of(&c.command_line))
+}
+
+/// The program in a service's command line (`"C:\…\OpenRGB.exe" --flag` → `C:\…\OpenRGB.exe`).
+fn executable_of(command_line: &str) -> String {
+    let value = command_line.trim();
+    match value.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest).to_string(),
+        None => value.to_string(),
     }
-    let line = qc.lines().find(|l| l.trim_start().starts_with("BINARY_PATH_NAME"))?;
-    let value = line.split_once(':')?.1.trim();
-    let value = value.strip_prefix('"').map(|v| v.split('"').next().unwrap_or(v)).unwrap_or(value);
-    Some(value.to_string())
 }
 
 /// Start Lumen's service. Allowed without elevation by the permissions the
 /// adopt step gives it; returns once the start request is accepted.
 pub fn lumen_service_start() -> Result<(), String> {
-    match run("sc.exe", &["start", NAME])? {
-        (0, _) | (1056, _) => Ok(()), // 1056: already running
-        (code, out) => Err(format!("could not start the {NAME} service ({code}): {}", last_line(&out))),
-    }
+    scm::start(NAME).map_err(|e| format!("could not start the {NAME} service: {e}"))
 }
 
 /// Ask Lumen's service to stop; returns once the request is delivered.
 pub fn lumen_service_stop() -> Result<(), String> {
-    match run("sc.exe", &["stop", NAME])? {
-        (0, _) | (1062, _) => Ok(()), // 1062: not running
-        (code, out) => Err(format!("could not stop the {NAME} service ({code}): {}", last_line(&out))),
-    }
+    scm::stop(NAME).map_err(|e| format!("could not stop the {NAME} service: {e}"))
 }
 
-fn last_line(out: &str) -> &str {
-    out.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("")
+/// Whether OpenRGB is set up to run above normal priority (done by the adopt
+/// step from Lumen 0.3.1 on; services cannot be given a priority any other way).
+pub fn priority_raised() -> bool {
+    registry_dword(IFEO_PERF_OPTIONS, "CpuPriorityClass") == Some(OPENRGB_PRIORITY)
+}
+
+fn registry_dword(key: &str, value: &str) -> Option<u32> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_SUBKEY_WOW6464KEY};
+    let (key, value) = (wide(key), wide(value));
+    let mut data = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: both strings are NUL-terminated and `data` matches `size`.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY,
+            std::ptr::null_mut(),
+            (&mut data as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    (status == 0).then_some(data)
+}
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
+/// A Windows error code as text: "Access is denied. (os error 5)".
+fn os_error(code: u32) -> String {
+    std::io::Error::from_raw_os_error(code as i32).to_string()
+}
+
+/// The Service Control Manager, called directly.
+mod scm {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER, ERROR_SERVICE_ALREADY_RUNNING, ERROR_SERVICE_NOT_ACTIVE};
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, QueryServiceConfigW, QueryServiceStatus, StartServiceW, QUERY_SERVICE_CONFIGW, SC_HANDLE,
+        SC_MANAGER_CONNECT, SERVICE_CONTROL_STOP, SERVICE_DISABLED, SERVICE_QUERY_CONFIG, SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START,
+        SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STOP, SERVICE_STOPPED, SERVICE_STOP_PENDING,
+    };
+
+    use super::{os_error, wide, SvcState};
+
+    struct Handle(SC_HANDLE);
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from OpenSCManagerW/OpenServiceW and is closed once.
+            unsafe { CloseServiceHandle(self.0) };
+        }
+    }
+
+    /// A service opened with `access`; `Err` carries the Windows error code
+    /// (1060 when there is no such service).
+    struct Service {
+        handle: Handle,
+        _manager: Handle,
+    }
+
+    fn open(name: &str, access: u32) -> Result<Service, u32> {
+        let name = wide(name);
+        // SAFETY: plain calls with a NUL-terminated name; every handle is owned by a `Handle`.
+        unsafe {
+            let manager = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
+            if manager.is_null() {
+                return Err(GetLastError());
+            }
+            let manager = Handle(manager);
+            let service = OpenServiceW(manager.0, name.as_ptr(), access);
+            if service.is_null() {
+                return Err(GetLastError());
+            }
+            Ok(Service { handle: Handle(service), _manager: manager })
+        }
+    }
+
+    pub fn state(name: &str) -> Option<SvcState> {
+        let service = open(name, SERVICE_QUERY_STATUS).ok()?;
+        // SAFETY: SERVICE_STATUS is plain data and the handle is open.
+        let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+        if unsafe { QueryServiceStatus(service.handle.0, &mut status) } == 0 {
+            return Some(SvcState::Other);
+        }
+        Some(state_from(status.dwCurrentState))
+    }
+
+    pub(super) fn state_from(code: u32) -> SvcState {
+        match code {
+            SERVICE_STOPPED => SvcState::Stopped,
+            SERVICE_START_PENDING => SvcState::StartPending,
+            SERVICE_STOP_PENDING => SvcState::StopPending,
+            SERVICE_RUNNING => SvcState::Running,
+            _ => SvcState::Other,
+        }
+    }
+
+    pub struct Config {
+        pub disabled: bool,
+        pub command_line: String,
+    }
+
+    pub fn config(name: &str) -> Option<Config> {
+        let service = open(name, SERVICE_QUERY_CONFIG).ok()?;
+        let mut needed = 0u32;
+        // SAFETY: the first call only asks for the size; the second gets a
+        // buffer of that size, aligned for QUERY_SERVICE_CONFIGW (u64 words),
+        // whose string pointers point into the same buffer.
+        unsafe {
+            if QueryServiceConfigW(service.handle.0, std::ptr::null_mut(), 0, &mut needed) == 0 && GetLastError() != ERROR_INSUFFICIENT_BUFFER {
+                return None;
+            }
+            let mut buf = vec![0u64; (needed as usize).div_ceil(8).max(1)];
+            let config = buf.as_mut_ptr().cast::<QUERY_SERVICE_CONFIGW>();
+            if QueryServiceConfigW(service.handle.0, config, (buf.len() * 8) as u32, &mut needed) == 0 {
+                return None;
+            }
+            let config = &*config;
+            Some(Config { disabled: config.dwStartType == SERVICE_DISABLED, command_line: from_wide(config.lpBinaryPathName) })
+        }
+    }
+
+    unsafe fn from_wide(p: *const u16) -> String {
+        if p.is_null() {
+            return String::new();
+        }
+        let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+        String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
+    }
+
+    pub fn start(name: &str) -> Result<(), String> {
+        let service = open(name, SERVICE_START).map_err(os_error)?;
+        // SAFETY: no start arguments; the handle is open.
+        if unsafe { StartServiceW(service.handle.0, 0, std::ptr::null()) } == 0 {
+            match unsafe { GetLastError() } {
+                ERROR_SERVICE_ALREADY_RUNNING => {}
+                code => return Err(os_error(code)),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stop(name: &str) -> Result<(), String> {
+        let service = open(name, SERVICE_STOP).map_err(os_error)?;
+        // SAFETY: SERVICE_STATUS is plain data and the handle is open.
+        let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+        if unsafe { ControlService(service.handle.0, SERVICE_CONTROL_STOP, &mut status) } == 0 {
+            match unsafe { GetLastError() } {
+                ERROR_SERVICE_NOT_ACTIVE => {}
+                code => return Err(os_error(code)),
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where the adopt step puts Lumen's protected copy of OpenRGB.
@@ -146,34 +285,70 @@ pub fn task_end() -> Result<(), String> {
     }
 }
 
-/// PID of the process listening on a local TCP port.
+/// PID of the process listening on a local TCP (IPv4) port.
 pub fn listener_pid(port: u16) -> Option<u32> {
-    let (_, out) = run("netstat.exe", &["-ano", "-p", "TCP"]).ok()?;
-    let suffix = format!(":{port}");
-    for line in out.lines() {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.len() >= 5 && cols[0] == "TCP" && cols[3] == "LISTENING" && cols[1].ends_with(&suffix) {
-            return cols[4].parse().ok();
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER};
+    const AF_INET: u32 = 2;
+    let mut size = 0u32;
+    let mut buf: Vec<u64> = Vec::new();
+    // The table can grow between the size query and the read: retry a few times.
+    for _ in 0..4 {
+        // SAFETY: the buffer holds `size` bytes, aligned for the table (u64 words).
+        let status = unsafe { GetExtendedTcpTable(buf.as_mut_ptr().cast(), &mut size, 0, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0) };
+        if status == 0 {
+            // SAFETY: on success the buffer holds a MIB_TCPTABLE_OWNER_PID with `dwNumEntries` rows.
+            let rows = unsafe {
+                let table = &*buf.as_ptr().cast::<MIB_TCPTABLE_OWNER_PID>();
+                std::slice::from_raw_parts(table.table.as_ptr(), table.dwNumEntries as usize)
+            };
+            return rows.iter().find(|row: &&MIB_TCPROW_OWNER_PID| port_of(row.dwLocalPort) == port).map(|row| row.dwOwningPid);
         }
+        buf = vec![0u64; (size as usize).div_ceil(8) + 64];
+        size = (buf.len() * 8) as u32;
     }
     None
 }
 
+/// TCP tables keep ports in network byte order, in the low 16 bits.
+fn port_of(raw: u32) -> u16 {
+    u16::from_be(raw as u16)
+}
+
 /// Executable path of a process we are allowed to inspect (not SYSTEM services).
 pub fn process_path(pid: u32) -> Option<String> {
-    let (code, out) = run(
-        "powershell.exe",
-        &["-NoProfile", "-NonInteractive", "-Command", &format!("(Get-Process -Id {pid} -ErrorAction SilentlyContinue).Path")],
-    )
-    .ok()?;
-    (code == 0).then(|| out.trim().to_string()).filter(|s| !s.is_empty())
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the handle is checked and closed; the buffer length is passed along.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        (ok != 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
+    }
 }
 
 pub fn kill_pid(pid: u32) -> Result<(), String> {
-    match run("taskkill.exe", &["/PID", &pid.to_string(), "/F"])? {
-        (0, _) => Ok(()),
-        (code, out) => Err(format!("taskkill failed ({code}): {}", out.trim())),
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    // SAFETY: the handle is checked and closed.
+    unsafe {
+        let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        if process.is_null() {
+            return Err(format!("cannot open process {pid}: {}", os_error(GetLastError())));
+        }
+        let ok = TerminateProcess(process, 1);
+        let error = GetLastError();
+        CloseHandle(process);
+        if ok == 0 {
+            return Err(format!("cannot end process {pid}: {}", os_error(error)));
+        }
     }
+    Ok(())
 }
 
 /// One-time elevated setup: retire OpenRGB's service and Lumen 0.2's task,
@@ -244,9 +419,7 @@ mod shell {
     use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(Some(0)).collect()
-    }
+    use super::wide;
 
     /// Windows PowerShell by full path: whatever runs elevated must not be
     /// found through a search that a user-writable folder could win.
@@ -330,13 +503,38 @@ mod tests {
     }
 
     #[test]
-    fn parses_service_states() {
-        let running = "SERVICE_NAME: LumenOpenRGB\r\n        TYPE               : 10  WIN32_OWN_PROCESS\r\n        STATE              : 4  RUNNING\r\n";
-        assert_eq!(parse_state(running), SvcState::Running);
-        assert_eq!(parse_state("        STATE              : 3  STOP_PENDING\r\n"), SvcState::StopPending);
-        assert_eq!(parse_state("        STATE              : 1  STOPPED\r\n"), SvcState::Stopped);
-        assert_eq!(parse_state("        STATE              : 2  START_PENDING\r\n"), SvcState::StartPending);
-        assert_eq!(parse_state("garbage"), SvcState::Other);
+    fn maps_service_states() {
+        assert_eq!(scm::state_from(4), SvcState::Running);
+        assert_eq!(scm::state_from(3), SvcState::StopPending);
+        assert_eq!(scm::state_from(1), SvcState::Stopped);
+        assert_eq!(scm::state_from(2), SvcState::StartPending);
+        assert_eq!(scm::state_from(7), SvcState::Other, "paused");
+    }
+
+    #[test]
+    fn finds_the_executable_in_a_service_command_line() {
+        assert_eq!(executable_of(r#""C:\Program Files\Lumen\OpenRGB\OpenRGB.exe""#), r"C:\Program Files\Lumen\OpenRGB\OpenRGB.exe");
+        assert_eq!(executable_of(r#""C:\Program Files\OpenRGB\OpenRGB.exe" --server"#), r"C:\Program Files\OpenRGB\OpenRGB.exe");
+        assert_eq!(executable_of(r"C:\OpenRGB\OpenRGB.exe "), r"C:\OpenRGB\OpenRGB.exe");
+    }
+
+    #[test]
+    fn reads_ports_in_network_order() {
+        // 6742 = 0x1A56, stored big-endian in the low word.
+        assert_eq!(port_of(0x0000_561A), 6742);
+    }
+
+    #[test]
+    fn queries_services_and_ports_without_helpers() {
+        // Every Windows install has these; nothing here needs a child process.
+        assert_eq!(scm::state("EventLog"), Some(SvcState::Running));
+        assert!(scm::config("EventLog").is_some_and(|c| c.command_line.to_ascii_lowercase().contains("svchost")));
+        assert_eq!(scm::state("NoSuchServiceForLumen"), None);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(listener_pid(port), Some(std::process::id()));
+        let me = process_path(std::process::id()).unwrap();
+        assert!(me.to_ascii_lowercase().ends_with(".exe"), "{me}");
     }
 
     #[test]

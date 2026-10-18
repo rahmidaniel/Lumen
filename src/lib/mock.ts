@@ -636,10 +636,11 @@ const status = (): OpenRgbStatus => ({
   bundled: true,
   server_reachable: true,
   started_by_lumen: true,
-  mode: query.has("legacy") ? "managed" : "child",
+  mode: query.has("legacy") || query.has("outdated") ? "managed" : "child",
   service: { running: false, disabled: true },
   can_manage: true,
   stale: false,
+  outdated: query.has("outdated"),
   legacy_task: query.has("legacy"),
 });
 const publish = () => snapshotListeners.forEach((l) => l(snapshot()));

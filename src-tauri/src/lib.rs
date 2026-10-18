@@ -13,6 +13,7 @@ mod diagnostics;
 mod lights;
 mod openrgb;
 mod power;
+mod priority;
 mod shortcuts;
 mod sidecar;
 mod tray;
@@ -246,9 +247,10 @@ fn delete_profile(app: AppHandle, state: State<'_, AppState>, name: String) -> C
     state.profiles.list().map_err(|e| e.to_string())
 }
 
+/// Async (off the main thread): it asks Windows about services and probes the port.
 #[tauri::command]
-fn openrgb_status(state: State<'_, AppState>) -> openrgb::Status {
-    state.openrgb.status()
+async fn openrgb_status(app: AppHandle) -> CmdResult<openrgb::Status> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().openrgb.status()).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -360,8 +362,8 @@ fn dismiss_conflict(state: State<'_, AppState>, id: String) -> Vec<conflicts::Co
 }
 
 #[tauri::command]
-fn diagnostics(app: AppHandle) -> String {
-    diagnostics::report(&app)
+async fn diagnostics(app: AppHandle) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || diagnostics::report(&app)).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -559,6 +561,10 @@ async fn supervise_openrgb(handle: AppHandle, engine: EngineHandle) {
             }
             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
         }
+        if power::session_ending() {
+            // Windows is stopping OpenRGB along with everything else.
+            continue;
+        }
         let (connected, unresponsive) = {
             let snap = rx.borrow();
             (snap.connected, snap.problem.is_some())
@@ -720,6 +726,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let log_dir = diagnostics::init_logging(handle.path().app_log_dir().ok());
             tracing::info!(version = %handle.package_info().version, log_dir = ?log_dir, "Lumen starting");
+            priority::raise();
 
             let dir = data_dir(&handle);
             let scene = load_last_scene(&dir);

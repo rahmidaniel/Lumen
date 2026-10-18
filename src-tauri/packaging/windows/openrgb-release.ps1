@@ -24,6 +24,16 @@ try {
         Remove-Item -LiteralPath $parent -Force
     }
 
+    # The priority the adopt step gave OpenRGB.exe; keys left empty go too.
+    $perf = $OpenRgbPerfOptions
+    if (Test-Path -LiteralPath $perf) {
+        Remove-ItemProperty -LiteralPath $perf -Name CpuPriorityClass -ErrorAction SilentlyContinue
+        foreach ($key in @($perf, (Split-Path -Parent $perf))) {
+            $item = Get-Item -LiteralPath $key -ErrorAction SilentlyContinue
+            if ($item -and $item.SubKeyCount -eq 0 -and $item.ValueCount -eq 0) { Remove-Item -LiteralPath $key -Force }
+        }
+    }
+
     if (Get-Service -Name OpenRGB -ErrorAction SilentlyContinue) {
         Set-Service -Name OpenRGB -StartupType Automatic
         if ((Get-Service -Name OpenRGB).Status -ne 'Running') { Start-Service -Name OpenRGB }

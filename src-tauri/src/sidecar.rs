@@ -145,7 +145,10 @@ enum Poll {
 /// Poll battery state for every sidecar device OpenRGB knows about: on each
 /// device-list change, then every minute — with a quick retry while a device
 /// has never answered (wireless gear dozes and misses the first probe).
-/// Devices that turn out to have no battery are left alone afterwards.
+/// Retries ask only the devices still missing: a poll pauses the device's
+/// lighting for a moment, and a mouse that sleeps all day must not make the
+/// keyboard stutter every fifteen seconds. Devices that turn out to have no
+/// battery are left alone afterwards.
 pub async fn run(engine: EngineHandle, wanted: Arc<Wanted>) {
     let mut snapshots = engine.watch_snapshot();
     let mut known: Vec<(u32, Target)> = Vec::new();
@@ -158,7 +161,7 @@ pub async fn run(engine: EngineHandle, wanted: Arc<Wanted>) {
     let mut retry: Option<Duration> = None;
 
     loop {
-        tokio::select! {
+        let retrying = tokio::select! {
             changed = snapshots.changed() => {
                 if changed.is_err() {
                     return;
@@ -185,18 +188,19 @@ pub async fn run(engine: EngineHandle, wanted: Arc<Wanted>) {
                         engine.send(Command::SetExtras(id, DeviceExtras { battery: None, onboard, settings: true })).await;
                     }
                 }
+                false
             }
-            _ = ticker.tick() => {}
+            _ = ticker.tick() => false,
             _ = async {
                 match retry {
                     Some(d) => tokio::time::sleep(d).await,
                     None => std::future::pending().await,
                 }
-            } => {}
-        }
+            } => true,
+        };
         retry = None;
         for &(id, target) in &known {
-            if unsupported.contains(&id) {
+            if unsupported.contains(&id) || (retrying && answered.contains(&id)) {
                 continue;
             }
             match poll_device(&engine, id, target, wanted.clone()).await {

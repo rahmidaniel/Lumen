@@ -4,6 +4,30 @@ All notable changes to Lumen. Installers are on the
 [releases page](https://github.com/rahmidaniel/lumen/releases); from 0.2.1 on, Lumen
 updates itself from Settings → Updates.
 
+## Unreleased
+
+### Fixed
+
+- **Windows reported "sc.exe – Application Error (0xc0000142)" at every shutdown.** Lumen
+  stopped its OpenRGB service with `sc.exe` while Windows was closing it, when Windows
+  no longer starts programs; once that held up the shutdown for a minute. Lumen now
+  asks Windows directly instead of running `sc.exe`, `netstat`, `taskkill` or
+  PowerShell for its status checks, and starts no helper program while the session ends.
+- **The lights now go off at shutdown, as Settings → Lights promises.** Lumen was closed
+  before it heard about the shutdown. It now turns them off as soon as Windows asks
+  whether the session may end, and back on if the shutdown is cancelled.
+- **Lighting stuttered and fell out of step while games or builds kept every core
+  busy.** Frames went out up to a fifth of a second late. Lumen now runs at
+  above-normal priority, sends every device its frame in a single write, and never lets
+  frames queue up behind a slow OpenRGB. On Windows, Settings → OpenRGB offers *Update
+  Lumen's OpenRGB service* (one admin prompt) so OpenRGB itself runs at above-normal
+  priority too; an OpenRGB Lumen starts as its own process gets that automatically.
+- A wireless device that stayed asleep made the others stutter every 15 seconds: the
+  quick battery retry re-read every device, pausing its lighting each time. Retries now
+  ask only the devices that have not answered.
+- Settings: switches beside long descriptions were squeezed, with the knob sticking
+  out of the track. They keep their size now, and the whole row is clickable.
+
 ## 0.3.0 — 2026-10-12
 
 A security fix for *Let Lumen manage OpenRGB*, lights that follow the PC, device settings, and

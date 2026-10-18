@@ -153,6 +153,29 @@ impl Client {
         self.send(id, packet::RGBCONTROLLER_UPDATELEDS, &parse::encode_update_leds(colors)?).await
     }
 
+    /// Push full frames for several controllers in a single write, so the
+    /// server takes them in together, followed by a request whose answer
+    /// (see [`Receipt`]) shows it has read them all. A streamer that waits for
+    /// that before sending more never piles frames up behind a slow server.
+    pub async fn update_leds_batch(&self, frames: &[(u32, &[Color])]) -> Result<Receipt> {
+        let mut wire = Vec::new();
+        for (id, colors) in frames {
+            append_frame(&mut wire, *id, packet::RGBCONTROLLER_UPDATELEDS, &parse::encode_update_leds(colors)?);
+        }
+        // Any request would do; this one is cheap and changes nothing.
+        append_frame(&mut wire, 0, packet::REQUEST_CONTROLLER_COUNT, &[]);
+
+        let (tx, rx) = oneshot::channel();
+        let seq = self.inner.next_seq.fetch_add(1, Ordering::Relaxed);
+        let mut writer = self.inner.writer.lock().await;
+        self.inner.pending.lock().unwrap().push_back(Pending { seq, dev_id: 0, pkt_id: packet::REQUEST_CONTROLLER_COUNT, tx });
+        if let Err(e) = writer.write_all(&wire).await {
+            self.inner.remove_pending(seq);
+            return Err(e.into());
+        }
+        Ok(Receipt(rx))
+    }
+
     pub async fn update_zone_leds(&self, id: u32, zone_idx: u32, colors: &[Color]) -> Result<()> {
         let payload = parse::encode_update_zone_leds(zone_idx, colors)?;
         self.send(id, packet::RGBCONTROLLER_UPDATEZONELEDS, &payload).await
@@ -267,11 +290,37 @@ impl Client {
     }
 }
 
-async fn write_frame(writer: &mut OwnedWriteHalf, dev_id: u32, pkt_id: u32, payload: &[u8]) -> Result<()> {
+/// Answer to the request [`Client::update_leds_batch`] sends after its frames.
+/// The server handles a connection's packets in order, so once it arrives the
+/// server has read every frame written before it.
+pub struct Receipt(oneshot::Receiver<Result<Vec<u8>>>);
+
+impl Receipt {
+    /// `None` while the server has not got that far; `Some(Ok(()))` once it
+    /// has; `Some(Err(_))` when the connection ended first.
+    pub fn check(&mut self) -> Option<Result<()>> {
+        match self.0.try_recv() {
+            Ok(result) => Some(result.map(drop)),
+            Err(oneshot::error::TryRecvError::Empty) => None,
+            Err(oneshot::error::TryRecvError::Closed) => Some(Err(Error::Disconnected)),
+        }
+    }
+
+    /// Wait until the server has read the frames.
+    pub async fn wait(self) -> Result<()> {
+        self.0.await.map_err(|_| Error::Disconnected)?.map(drop)
+    }
+}
+
+fn append_frame(out: &mut Vec<u8>, dev_id: u32, pkt_id: u32, payload: &[u8]) {
     let header = Header { dev_id, pkt_id, size: payload.len() as u32 };
+    out.extend_from_slice(&header.encode());
+    out.extend_from_slice(payload);
+}
+
+async fn write_frame(writer: &mut OwnedWriteHalf, dev_id: u32, pkt_id: u32, payload: &[u8]) -> Result<()> {
     let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
-    frame.extend_from_slice(&header.encode());
-    frame.extend_from_slice(payload);
+    append_frame(&mut frame, dev_id, pkt_id, payload);
     writer.write_all(&frame).await?;
     Ok(())
 }
@@ -443,6 +492,28 @@ mod tests {
         client.update_leds(0xC0FFEE, &[Color::WHITE]).await.unwrap();
         let ev = tokio::time::timeout(Duration::from_secs(2), events.recv()).await.unwrap().unwrap();
         assert!(matches!(ev, Event::DeviceListUpdated));
+    }
+
+    #[tokio::test]
+    async fn batch_receipt_comes_after_the_frames() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(fake_server(listener, 6, minimal_device_payload()));
+
+        let (client, mut events) = Client::connect(addr, "test").await.unwrap();
+        let mut receipt = client.update_leds_batch(&[(1, &[Color::WHITE][..]), (2, &[Color::BLACK, Color::WHITE][..])]).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while receipt.check().is_none() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // The fake server announces every frame it reads, before it answers the request.
+        for _ in 0..2 {
+            assert!(matches!(events.try_recv(), Ok(Event::DeviceListUpdated)));
+        }
+        client.update_leds_batch(&[]).await.unwrap().wait().await.unwrap();
     }
 
     #[tokio::test]

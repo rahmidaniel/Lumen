@@ -23,15 +23,16 @@ function Section({ title, aside, children }: { title: string; aside?: ReactNode;
   );
 }
 
+/** A setting with a switch; the whole row is the click target. */
 function ToggleRow({ title, hint, checked, onChange, disabled }: { title: string; hint?: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
-    <div className={cx("flex items-center justify-between gap-3", disabled && "pointer-events-none opacity-50")}>
-      <div className="flex flex-col">
+    <label className={cx("flex items-center justify-between gap-4", disabled ? "opacity-50" : "cursor-pointer")}>
+      <span className="flex min-w-0 flex-col gap-0.5">
         <span className="text-sm">{title}</span>
-        {hint && <span className="text-xs text-muted">{hint}</span>}
-      </div>
-      <Toggle checked={checked} onChange={onChange} label={title} />
-    </div>
+        {hint && <span className="text-xs leading-snug text-muted">{hint}</span>}
+      </span>
+      <Toggle checked={checked} onChange={onChange} label={title} disabled={disabled} />
+    </label>
   );
 }
 
@@ -263,9 +264,13 @@ function OpenRgbSection() {
           </div>
         </div>
       )}
-      {openrgb?.mode === "managed" && openrgb.stale && (
+      {openrgb?.mode === "managed" && (openrgb.stale || openrgb.outdated) && (
         <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn/10 p-2">
-          <span className="text-xs text-warn">Lumen's OpenRGB service runs a different copy of OpenRGB than this version ships (an earlier install, or a development build).</span>
+          <span className="text-xs text-warn">
+            {openrgb.stale
+              ? "Lumen's OpenRGB service runs a different copy of OpenRGB than this version ships (an earlier install, or a development build)."
+              : "Lumen's OpenRGB service was set up by an older Lumen. Updating it lets OpenRGB run at a higher priority, so the lights stay smooth and in step while games or builds keep the PC busy. One admin prompt."}
+          </span>
           <div>
             <Button size="sm" disabled={busy} onClick={() => adoptOpenrgb()}>
               <ShieldCheck size={14} /> {busy ? "Working…" : "Update Lumen's OpenRGB service"}

@@ -213,6 +213,8 @@ export interface OpenRgbStatus {
   can_manage: boolean;
   /** Lumen's service runs a different OpenRGB than this install's: update it. */
   stale: boolean;
+  /** Lumen's service was set up by an older Lumen (OpenRGB at normal priority): update it. */
+  outdated: boolean;
   /** Still managed through Lumen 0.2's scheduled task, which other programs can abuse. */
   legacy_task: boolean;
 }

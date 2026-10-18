@@ -1,6 +1,10 @@
 # Helpers shared by Lumen's elevated OpenRGB scripts. Lumen dot-sources this
 # before running one of them, all inside a single elevated PowerShell.
 
+# Where Windows keeps the start-up priority for every OpenRGB.exe (Lumen reads
+# it back to tell whether its service is set up the current way).
+$OpenRgbPerfOptions = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\OpenRGB.exe\PerfOptions'
+
 # Stop a service and wait for it; end its process when it ignores the request
 # (OpenRGB's server has been seen wedging in STOP_PENDING).
 function Stop-ServiceHard([string]$ServiceName) {

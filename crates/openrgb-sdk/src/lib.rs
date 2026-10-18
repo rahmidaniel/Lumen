@@ -25,7 +25,7 @@ pub mod parse;
 pub mod protocol;
 pub mod wire;
 
-pub use client::{Client, Event, DEFAULT_TIMEOUT};
+pub use client::{Client, Event, Receipt, DEFAULT_TIMEOUT};
 pub use error::{Error, Result};
 pub use model::*;
 pub use protocol::{DEFAULT_PORT, PROTOCOL_VERSION};

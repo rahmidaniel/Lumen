@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use openrgb_sdk::{Client, Color, Device, DeviceType, Event, ZoneType, DEFAULT_PORT};
+use openrgb_sdk::{Client, Color, Device, DeviceType, Event, Receipt, ZoneType, DEFAULT_PORT};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, watch};
 
@@ -86,6 +86,10 @@ pub enum Blackout {
 /// How long an empty device list counts as "still detecting" after connecting
 /// (OpenRGB adds devices one by one while its detection runs).
 const DETECTION_GRACE: Duration = Duration::from_secs(15);
+
+/// How long OpenRGB may take to read a frame before the connection counts as
+/// hung and is rebuilt. Far beyond any busy-PC delay.
+const STALL_LIMIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub enum Command {
@@ -260,6 +264,7 @@ pub fn spawn(config: EngineConfig, scene: Scene) -> EngineHandle {
         renderer: Renderer::new(&[], &Layout::default()),
         last: Vec::new(),
         out: Vec::new(),
+        in_flight: None,
         paused: false,
         blackout: None,
         force_frame: false,
@@ -292,6 +297,11 @@ struct Engine {
     /// Last frame sent per device; empty vec = nothing sent yet.
     last: Vec<Vec<Color>>,
     out: Vec<Vec<Color>>,
+    /// Frames OpenRGB has not read yet, and when they went out. While it lags
+    /// behind (a busy PC), ticks pass without sending instead of queueing more
+    /// frames, so whatever goes out next is the newest and the lights never
+    /// trail behind.
+    in_flight: Option<(Instant, Receipt)>,
     paused: bool,
     blackout: Option<Blackout>,
     /// Send one frame even though streaming is paused (the lights came back on).
@@ -503,6 +513,7 @@ impl Engine {
 
     fn disconnect(&mut self) {
         self.client = None;
+        self.in_flight = None;
         self.detect_since = None;
         self.devices.clear();
         self.rebuild();
@@ -587,6 +598,19 @@ impl Engine {
         if !self.dirty && !animated {
             return;
         }
+        if let Some((sent, receipt)) = &mut self.in_flight {
+            match receipt.check() {
+                // Still reading the last frames: send the newest once it has caught up.
+                None if sent.elapsed() < STALL_LIMIT => return,
+                None => {
+                    tracing::warn!("OpenRGB has not read a frame for {} s; reconnecting", STALL_LIMIT.as_secs());
+                    self.disconnect();
+                    return;
+                }
+                // Caught up. (An error means the connection is ending; the event loop handles that.)
+                Some(_) => self.in_flight = None,
+            }
+        }
         self.dirty = false;
         self.force_frame = false;
 
@@ -601,16 +625,22 @@ impl Engine {
             self.renderer.render(&self.scene, t, &mut self.out);
         }
 
-        for (i, device) in self.devices.iter().enumerate() {
-            if self.held.contains(&device.id) {
-                continue;
-            }
-            if self.out[i] != self.last[i] {
-                if let Err(e) = client.update_leds(device.id, &self.out[i]).await {
-                    tracing::warn!(%e, device = %device.name, "frame send failed");
+        // Every changed device in one write, so OpenRGB takes them in together
+        // and the devices change in step.
+        let changed: Vec<usize> = (0..self.devices.len()).filter(|&i| !self.held.contains(&self.devices[i].id) && self.out[i] != self.last[i]).collect();
+        if !changed.is_empty() {
+            let frames: Vec<(u32, &[Color])> = changed.iter().map(|&i| (self.devices[i].id, self.out[i].as_slice())).collect();
+            let sent = client.update_leds_batch(&frames).await;
+            drop(frames);
+            match sent {
+                Ok(receipt) => self.in_flight = Some((Instant::now(), receipt)),
+                Err(e) => {
+                    tracing::warn!(%e, "frame send failed");
                     self.disconnect();
                     return;
                 }
+            }
+            for i in changed {
                 self.last[i].clone_from(&self.out[i]);
             }
         }

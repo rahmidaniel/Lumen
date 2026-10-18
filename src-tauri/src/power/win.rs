@@ -5,6 +5,7 @@
 //! windows only. It is never shown and lives on its own thread, so it does not
 //! depend on Lumen's main window (which comes and goes).
 
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 
 use windows_sys::core::GUID;
@@ -21,7 +22,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
-use super::PowerEvent;
+use super::{PowerEvent, SESSION_ENDING};
 
 type Handler = Box<dyn Fn(PowerEvent) + Send + Sync>;
 static HANDLER: OnceLock<Handler> = OnceLock::new();
@@ -117,10 +118,23 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             0
         }
-        WM_QUERYENDSESSION => TRUE as LRESULT,
+        // Windows asks every window before it ends the session, and only then
+        // tells them it does. Lumen's process is gone the moment that news
+        // reaches tao's own window (tao exits right there), so the lights go
+        // out on the question, while there is still time.
+        WM_QUERYENDSESSION => {
+            if !SESSION_ENDING.swap(true, Ordering::SeqCst) {
+                emit(PowerEvent::Shutdown);
+            }
+            TRUE as LRESULT
+        }
         WM_ENDSESSION => {
             if wparam != 0 {
-                emit(PowerEvent::Shutdown);
+                if !SESSION_ENDING.swap(true, Ordering::SeqCst) {
+                    emit(PowerEvent::Shutdown);
+                }
+            } else if SESSION_ENDING.swap(false, Ordering::SeqCst) {
+                emit(PowerEvent::ShutdownCancelled);
             }
             0
         }

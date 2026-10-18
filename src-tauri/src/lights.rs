@@ -63,6 +63,7 @@ impl Policy {
     pub fn apply(&mut self, event: PowerEvent) {
         match event {
             PowerEvent::Suspend | PowerEvent::Shutdown => self.asleep = true,
+            PowerEvent::ShutdownCancelled => self.asleep = false,
             PowerEvent::Resume => {
                 self.asleep = false;
                 self.idle = false;
@@ -119,6 +120,10 @@ mod tests {
         assert_eq!(p.blackout(), Some(Blackout::Sleep));
         p.apply(PowerEvent::Resume);
         assert_eq!(p.blackout(), None);
+        p.apply(PowerEvent::Shutdown);
+        assert_eq!(p.blackout(), Some(Blackout::Sleep));
+        p.apply(PowerEvent::ShutdownCancelled);
+        assert_eq!(p.blackout(), None, "a cancelled shutdown brings the lights back");
     }
 
     #[test]

@@ -39,7 +39,31 @@ recognises the executable and takes the process over. On macOS and Linux the bun
 copy is simply a child process.
 
 If OpenRGB goes away while it is Lumen's job to run it (it crashed, or someone ended
-it), Lumen starts it again after five seconds, at most every thirty.
+it), Lumen starts it again after five seconds, at most every thirty. While Windows ends
+the session (shutdown, restart, sign-out) Lumen leaves that to Windows: it turns the
+lights off when Windows first asks whether the session may end, stops its OpenRGB on
+exit, and never starts a helper program then (Windows refuses to start programs during
+shutdown). Services, ports and processes are queried through the Windows API for the
+same reason.
+
+## Keeping up while the PC is busy
+
+Lumen streams frames at up to 60 fps, and every device has to get each frame on time
+for an effect to move across them in one piece. Two things keep that true when a game
+or a build has every core busy:
+
+- **Priority.** Windows shares the CPU round-robin among threads of equal priority, and
+  a thread waking from a timer gets no boost for it, so a normal-priority frame tick
+  waits behind the busy threads (frames went out 100–200 ms late with 24 busy threads
+  on a 6-core CPU). Lumen runs at above-normal priority and opts out of power throttling;
+  it needs about 1 % of one core. The OpenRGB child process Lumen starts gets the same
+  priority, and so does the managed service (see below). The WebView's processes stay
+  at normal priority.
+- **No backlog.** Each tick sends every changed device in one write, followed by a
+  request OpenRGB answers once it has read them. Until that answer arrives, ticks pass
+  without sending, so a slow OpenRGB never has frames queued up: whatever goes out next
+  is the newest frame. If OpenRGB reads nothing for 30 s, Lumen reconnects (and the
+  supervisor restarts an OpenRGB that has hung).
 
 ## Managed mode on Windows
 
@@ -56,6 +80,10 @@ Lumen manage OpenRGB* replaces it with a single admin prompt
    Its permissions let interactive users start and stop it, so a normal-user Lumen
    starts it with itself, restarts it when it stops answering and stops it on exit,
    without further prompts. Windows restarts it if it crashes.
+4. `OpenRGB.exe` starts with above-normal priority: `CpuPriorityClass = 6` under
+   `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution
+   Options\OpenRGB.exe\PerfOptions`, the only way to give a service a priority. It
+   applies to every `OpenRGB.exe` on the machine.
 
 In service mode OpenRGB keeps its settings in `service_config\` next to the executable;
 the adopt step pins its SDK server to `127.0.0.1` there. If OpenRGB ignores a stop
@@ -63,9 +91,11 @@ request (it has been seen wedging in `STOP_PENDING`), a restart from Settings en
 through one admin prompt.
 
 If the service runs a different OpenRGB than the one shipped with this Lumen (an
-earlier install, or a development build), Settings says so and offers *Update Lumen's
-OpenRGB service*. *Hand back to the service* / *Stop managing* (`openrgb-release.ps1`)
-removes the service and its folder and re-enables OpenRGB's own service if there is one.
+earlier install, or a development build), or was set up before step 4 existed (Lumen
+0.3.0), Settings says so and offers *Update Lumen's OpenRGB service*, which re-runs the
+adopt step. *Hand back to the service* / *Stop managing* (`openrgb-release.ps1`)
+removes the service, its folder and the priority setting, and re-enables OpenRGB's own
+service if there is one.
 
 Every elevated step runs as one PowerShell whose script travels inside its own command
 line (`-EncodedCommand`), so nothing in a user-writable folder can be swapped between

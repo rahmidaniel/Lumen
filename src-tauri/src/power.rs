@@ -7,6 +7,8 @@
 #[cfg(windows)]
 mod win;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// Something the operating system told us.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PowerEvent {
@@ -16,10 +18,22 @@ pub enum PowerEvent {
     Resume,
     /// The session is ending: shutdown, restart or sign-out.
     Shutdown,
+    /// The session goes on after all (a program refused to close, or the
+    /// user cancelled the shutdown).
+    ShutdownCancelled,
     /// The display turned on (`true`) or off (`false`).
     Display(bool),
     /// The session was locked (`true`) or unlocked (`false`).
     Lock(bool),
+}
+
+static SESSION_ENDING: AtomicBool = AtomicBool::new(false);
+
+/// The session is ending (shutdown, restart, sign-out) and Lumen is about to
+/// be closed. Windows no longer starts programs then, and OpenRGB going away
+/// is expected rather than something to repair.
+pub fn session_ending() -> bool {
+    SESSION_ENDING.load(Ordering::SeqCst)
 }
 
 impl PowerEvent {

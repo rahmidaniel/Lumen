@@ -53,6 +53,9 @@ pub struct Status {
     /// Lumen's service runs a different OpenRGB than the one shipped with this
     /// install (an older Lumen's, or a development build's): update it.
     pub stale: bool,
+    /// Lumen's service was set up by an older Lumen and lacks something this
+    /// one does (OpenRGB's raised priority): updating it is one admin prompt.
+    pub outdated: bool,
     /// Still managed through Lumen 0.2's scheduled task, which other programs
     /// can abuse to get administrator rights: switch to the service.
     pub legacy_task: bool,
@@ -242,6 +245,7 @@ impl Manager {
             service,
             can_manage: cfg!(windows) && self.own_exe().is_some(),
             stale: managed == Managed::Service && self.stale(),
+            outdated: managed == Managed::Service && !priority_raised(),
             legacy_task: managed == Managed::LegacyTask,
         }
     }
@@ -514,6 +518,9 @@ impl Manager {
 
     /// Stop whatever Lumen started: its service, the task's OpenRGB or the
     /// child process. A server Lumen merely attached to is left alone.
+    ///
+    /// Also runs while Windows shuts down, when it refuses to start new
+    /// programs: nothing here may need one then.
     pub fn stop(&self) {
         if std::mem::take(&mut *self.started.lock().unwrap()) {
             match self.managed() {
@@ -523,6 +530,8 @@ impl Manager {
                         tracing::warn!(%e, "could not stop Lumen's OpenRGB service");
                     }
                 }
+                // Ending the task takes schtasks.exe; Windows ends the task itself at sign-out.
+                Managed::LegacyTask if crate::power::session_ending() => {}
                 Managed::LegacyTask => {
                     tracing::info!("stopping OpenRGB (Lumen 0.2's task)");
                     if let Err(e) = task_end() {
@@ -558,8 +567,8 @@ fn same_file_contents(a: &Path, b: &Path) -> bool {
 
 #[cfg(windows)]
 use win::{
-    adopt, force_stop_lumen_service, kill_pid, listener_pid, lumen_service, lumen_service_binary, lumen_service_start, lumen_service_stop, process_path,
-    release, restart_service, task_end, task_exists, task_run, SvcState,
+    adopt, force_stop_lumen_service, kill_pid, listener_pid, lumen_service, lumen_service_binary, lumen_service_start, lumen_service_stop, priority_raised,
+    process_path, release, restart_service, task_end, task_exists, task_run, SvcState,
 };
 #[cfg(windows)]
 fn service_info() -> Option<ServiceInfo> {
@@ -631,6 +640,9 @@ mod shims {
     pub fn protected_exe() -> PathBuf {
         PathBuf::new()
     }
+    pub fn priority_raised() -> bool {
+        true
+    }
 }
 #[cfg(not(windows))]
 use shims::*;
@@ -645,6 +657,14 @@ fn spawn_server(exe: &Path) -> std::io::Result<Child> {
     let mut cmd = Command::new(exe);
     cmd.args(["--server", "--server-host", "127.0.0.1", "--noautoconnect"]);
     cmd.current_dir(exe.parent().unwrap_or(Path::new(".")));
+    #[cfg(windows)]
+    {
+        // Like Lumen itself (see `priority`): its device threads must keep
+        // writing frames when the PC is busy, or devices fall out of step.
+        use std::os::windows::process::CommandExt;
+        const ABOVE_NORMAL_PRIORITY_CLASS: u32 = 0x0000_8000;
+        cmd.creation_flags(ABOVE_NORMAL_PRIORITY_CLASS);
+    }
     #[cfg(target_os = "linux")]
     {
         // Run the AppImage even where FUSE is missing, and keep the library and

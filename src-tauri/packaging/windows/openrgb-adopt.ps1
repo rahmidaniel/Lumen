@@ -6,7 +6,10 @@
 #   3. the OpenRGB folder in $Source (Lumen's bundled copy) is mirrored to
 #      "Program Files\Lumen\OpenRGB", which only administrators can change;
 #   4. a service "LumenOpenRGB" runs that copy as LocalSystem, started on
-#      demand, and every interactive user may start and stop it.
+#      demand, and every interactive user may start and stop it;
+#   5. OpenRGB.exe starts with above-normal priority (Image File Execution
+#      Options, the only way to give a service one), so its device threads
+#      keep the lights in step while games or builds keep every core busy.
 # Afterwards a normal-user Lumen starts, stops and restarts OpenRGB without
 # further prompts, and OpenRGB keeps the elevation it needs for SMBus devices
 # such as motherboards and RAM. In service mode OpenRGB keeps its settings in
@@ -54,6 +57,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not set the service's permissions (sc sdset exit code $LASTEXITCODE)." }
     # Bring it back if it crashes.
     & sc.exe failure $Name reset= 3600 actions= restart/5000/restart/10000/restart/30000 | Out-Null
+    # 6 = above normal. Applies from the next start; Lumen starts the service right after this.
+    $perf = $OpenRgbPerfOptions
+    if (-not (Test-Path -LiteralPath $perf)) { New-Item -Path $perf -Force | Out-Null }
+    Set-ItemProperty -LiteralPath $perf -Name CpuPriorityClass -Value 6 -Type DWord
     exit 0
 } catch {
     Write-Failure $Log $_
