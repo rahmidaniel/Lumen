@@ -4,7 +4,9 @@ All notable changes to Lumen. Installers are on the
 [releases page](https://github.com/rahmidaniel/lumen/releases); from 0.2.1 on, Lumen
 updates itself from Settings → Updates.
 
-## Unreleased
+## 0.3.1 — 2026-10-18
+
+Clean shutdowns on Windows, and lighting that keeps its rhythm while the PC is busy.
 
 ### Fixed
 
