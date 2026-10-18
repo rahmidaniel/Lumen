@@ -699,24 +699,42 @@ async fn battery_alerts(handle: AppHandle, engine: EngineHandle) {
     }
 }
 
-/// Show the main window, recreating it from the config if it was closed.
+/// Show the main window, recreating it from the config if it was closed. The
+/// config creates it hidden, so a recreated window has to be shown as well.
 fn show_main_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-        return;
-    }
-    let Some(cfg) = app.config().app.windows.first().cloned() else { return };
-    match tauri::WebviewWindowBuilder::from_config(app, &cfg).and_then(|b| b.build()) {
-        Ok(_) => tracing::debug!("window recreated"),
-        Err(e) => tracing::warn!(%e, "could not recreate window"),
-    }
+    let w = match app.get_webview_window("main") {
+        Some(w) => w,
+        None => {
+            let Some(cfg) = app.config().app.windows.first().cloned() else { return };
+            match tauri::WebviewWindowBuilder::from_config(app, &cfg).and_then(|b| b.build()) {
+                Ok(w) => {
+                    tracing::debug!("window recreated");
+                    w
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "could not recreate window");
+                    return;
+                }
+            }
+        }
+    };
+    let _ = w.show();
+    let _ = w.unminimize();
+    let _ = w.set_focus();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        // Registered first, so a second launch exits before it sets anything
+        // up (two copies would both drive the lights). The running copy shows
+        // its window instead, unless the launch came from the login item.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            tracing::info!("Lumen was launched again");
+            if !args.iter().any(|a| a == "--hidden") {
+                show_main_window(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -863,6 +881,9 @@ pub fn run() {
         RunEvent::ExitRequested { api, code: None, .. } => api.prevent_exit(),
         // Take the OpenRGB copy we started down with us.
         RunEvent::Exit => app.state::<AppState>().openrgb.stop(),
+        // Opening Lumen again from Finder or the Dock while it runs in the tray.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { has_visible_windows: false, .. } => show_main_window(app),
         _ => {}
     });
 }

@@ -53,6 +53,10 @@ npm run dev                   # UI only, in a browser, against an in-memory mock
 `LUMEN_OPENRGB_PATH=src-tauri/resources/openrgb/OpenRGB.exe` (Windows; on Linux
 the AppImage, on macOS the unpacked `OpenRGB.app/Contents/MacOS/OpenRGB`).
 
+Only one copy of Lumen runs at a time, and a dev build counts: with an installed
+Lumen (0.3.2 or later) running, a dev build just brings up that copy's window and
+exits. Quit the installed one first (tray → *Quit Lumen*).
+
 No RGB hardware needed for UI work: `npm run dev` serves the real UI against
 `src/lib/mock.ts`, which fakes a keyboard, mat, mouse and graphics card and renders the
 layer stack with the same maths as the Rust engine. URL switches show the less common

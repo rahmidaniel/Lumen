@@ -2166,7 +2166,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lumen"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "hidapi",
  "lumen-core",
@@ -2182,6 +2182,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-notification",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tokio",
  "tracing",
@@ -2192,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "openrgb-sdk",
  "serde",
@@ -2206,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-vendor-hid"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "hidapi",
  "serde",
@@ -2216,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-vendor-hyperx"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "hidapi",
  "serde",
@@ -2226,7 +2227,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-vendor-razer"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "hidapi",
  "serde",
@@ -2708,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "openrgb-sdk"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -4199,6 +4200,22 @@ dependencies = [
  "thiserror 2.0.21",
  "url",
  "windows",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "561cd99484561bc39c954768e7b41a66cebbe1ac3d9d081c34361f740c489e2c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 

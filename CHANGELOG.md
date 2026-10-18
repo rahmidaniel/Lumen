@@ -4,6 +4,21 @@ All notable changes to Lumen. Installers are on the
 [releases page](https://github.com/rahmidaniel/lumen/releases); from 0.2.1 on, Lumen
 updates itself from Settings → Updates.
 
+## 0.3.2 — 2026-10-18
+
+Lumen now runs only once: opening it again brings back the copy that is already running.
+
+### Fixed
+
+- **Opening Lumen while it ran in the tray started a second copy**, and both drove the
+  lights. Opening it again from the Start menu, a shortcut or the app menu now shows the
+  running copy's window; the launch at login (`--hidden`) leaves it in the tray.
+- **After you closed the window, the first click on the tray icon or *Show Lumen*
+  showed nothing.** It rebuilt the window hidden, and only a second click showed it.
+  One click is enough now.
+- macOS: clicking Lumen in the Dock, or opening it again from Finder, now brings the
+  window back after you closed it (not yet tried on a Mac).
+
 ## 0.3.1 — 2026-10-18
 
 Clean shutdowns on Windows, and lighting that keeps its rhythm while the PC is busy.
